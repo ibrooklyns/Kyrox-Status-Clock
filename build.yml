@@ -1,0 +1,555 @@
+name: Build APK
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main, master ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.7
+      - name: Write project files
+        run: |
+          set -e
+          cat > settings.gradle.kts <<'KX_EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "KyroxStatusClock"
+          include(":app")
+          KX_EOF
+          cat > build.gradle.kts <<'KX_EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          KX_EOF
+          cat > gradle.properties <<'KX_EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=false
+          kotlin.code.style=official
+          KX_EOF
+          mkdir -p app
+          cat > app/build.gradle.kts <<'KX_EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.kyrox.statusclock"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.kyrox.statusclock"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              buildTypes {
+                  release { isMinifyEnabled = false }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          KX_EOF
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'KX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.HOME" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:theme="@style/AppTheme">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".ClockOverlayService"
+                      android:exported="true"
+                      android:label="@string/app_name"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_config" />
+                  </service>
+              </application>
+          </manifest>
+          KX_EOF
+          mkdir -p app/src/main/res/xml
+          cat > app/src/main/res/xml/accessibility_config.xml <<'KX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged|typeViewScrolled"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
+              android:canRetrieveWindowContent="true"
+              android:description="@string/service_description"
+              android:notificationTimeout="100" />
+          KX_EOF
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/strings.xml <<'KX_EOF'
+          <resources>
+              <string name="app_name">Kyrox Status Clock</string>
+              <string name="service_description">Draws a clock at the status bar clock position, only while the home screen is showing. It does not read, store or send anything you do on screen.</string>
+          </resources>
+          KX_EOF
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/themes.xml <<'KX_EOF'
+          <resources>
+              <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar" />
+          </resources>
+          KX_EOF
+          mkdir -p app/src/main/java/com/kyrox/statusclock
+          cat > app/src/main/java/com/kyrox/statusclock/Prefs.kt <<'KX_EOF'
+          package com.kyrox.statusclock
+
+          import android.content.Context
+          import android.content.SharedPreferences
+
+          object Prefs {
+              const val FILE = "clockoverlay"
+              const val X = "x_dp"            // distance from the left screen edge
+              const val Y = "y_dp"            // vertical nudge (0 = top of the screen)
+              const val SIZE = "size_dp"      // text size
+              const val AMPM = "show_ampm"    // 12-hour mode only
+              const val WHITE = "white_text"
+              const val SMART = "smart_mode"  // hide overlay while the real clock is visible
+              const val FONT = "font_family"
+              const val CAL = "calibrating"   // true while the settings screen is open
+
+              const val DEF_X = 20f
+              const val DEF_Y = 0f
+              const val DEF_SIZE = 15.8f      // status_bar_clock_size from your theme
+              const val DEF_FONT = "mipro-medium"
+
+              fun sp(c: Context): SharedPreferences = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+          }
+          KX_EOF
+          mkdir -p app/src/main/java/com/kyrox/statusclock
+          cat > app/src/main/java/com/kyrox/statusclock/ClockOverlayService.kt <<'KX_EOF'
+          package com.kyrox.statusclock
+
+          import android.accessibilityservice.AccessibilityService
+          import android.content.BroadcastReceiver
+          import android.content.Context
+          import android.content.Intent
+          import android.content.IntentFilter
+          import android.content.SharedPreferences
+          import android.content.pm.PackageManager
+          import android.graphics.Color
+          import android.graphics.PixelFormat
+          import android.graphics.Typeface
+          import android.os.Build
+          import android.os.Handler
+          import android.os.Looper
+          import android.os.PowerManager
+          import android.util.TypedValue
+          import android.view.Gravity
+          import android.view.WindowManager
+          import android.view.accessibility.AccessibilityEvent
+          import android.widget.TextClock
+
+          /**
+           * Draws a clock where the status bar clock normally sits, but only while the
+           * home screen (launcher) is the active window.
+           * Uses an accessibility overlay window, which is allowed to sit over the status bar.
+           */
+          class ClockOverlayService : AccessibilityService() {
+
+              private var wm: WindowManager? = null
+              private var clockView: TextClock? = null
+              private var attached = false
+              private var lastPkg: String? = null
+              private var homePkgs: Set<String> = setOf("com.miui.home")
+              private val handler = Handler(Looper.getMainLooper())
+
+              private val evalRunnable = Runnable { evaluate() }
+
+              private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+                  handler.post {
+                      applyStyle()
+                      evaluate()
+                  }
+              }
+
+              private val screenReceiver = object : BroadcastReceiver() {
+                  override fun onReceive(context: Context?, intent: Intent?) {
+                      if (intent?.action == Intent.ACTION_SCREEN_OFF) hide() else schedule()
+                  }
+              }
+
+              override fun onServiceConnected() {
+                  super.onServiceConnected()
+                  wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                  resolveHomePackages()
+
+                  clockView = TextClock(this).apply {
+                      includeFontPadding = false
+                      gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                  }
+                  applyStyle()
+
+                  Prefs.sp(this).registerOnSharedPreferenceChangeListener(prefListener)
+                  val filter = IntentFilter().apply {
+                      addAction(Intent.ACTION_SCREEN_OFF)
+                      addAction(Intent.ACTION_USER_PRESENT)
+                  }
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                  } else {
+                      registerReceiver(screenReceiver, filter)
+                  }
+                  schedule()
+              }
+
+              override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+                  val e = event ?: return
+                  if (e.packageName?.toString() == packageName) return
+                  if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                      e.packageName?.toString()?.let { lastPkg = it }
+                  }
+                  // Page swipes only matter in smart mode.
+                  if (e.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED &&
+                      !Prefs.sp(this).getBoolean(Prefs.SMART, false)
+                  ) return
+                  schedule()
+              }
+
+              override fun onInterrupt() {}
+
+              override fun onDestroy() {
+                  handler.removeCallbacksAndMessages(null)
+                  try { Prefs.sp(this).unregisterOnSharedPreferenceChangeListener(prefListener) } catch (_: Exception) {}
+                  try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
+                  hide()
+                  super.onDestroy()
+              }
+
+              private fun schedule() {
+                  handler.removeCallbacks(evalRunnable)
+                  handler.postDelayed(evalRunnable, 120)
+              }
+
+              private fun resolveHomePackages() {
+                  val set = mutableSetOf("com.miui.home")
+                  try {
+                      val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                      val pkg = packageManager
+                          .resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)
+                          ?.activityInfo?.packageName
+                      if (pkg != null && pkg != "android") set.add(pkg)
+                  } catch (_: Exception) {}
+                  homePkgs = set
+              }
+
+              /** Decide whether the overlay should be on screen right now. */
+              private fun evaluate() {
+                  val p = Prefs.sp(this)
+
+                  // Settings screen open: always show (in red) so the position can be lined up.
+                  if (p.getBoolean(Prefs.CAL, false)) { show(); return }
+
+                  val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                  if (!pm.isInteractive) { hide(); return }
+
+                  var pkg: String? = null
+                  try {
+                      val root = rootInActiveWindow
+                      pkg = root?.packageName?.toString()
+                      root?.recycle()
+                  } catch (_: Exception) {}
+                  if (pkg == null) pkg = lastPkg
+
+                  val onHome = pkg != null && homePkgs.contains(pkg)
+                  if (!onHome) { hide(); return }
+
+                  if (p.getBoolean(Prefs.SMART, false) && realClockVisible()) { hide(); return }
+                  show()
+              }
+
+              /** Smart mode: is the system's own status bar clock currently visible? */
+              private fun realClockVisible(): Boolean {
+                  try {
+                      for (w in windows) {
+                          val root = w.root ?: continue
+                          val nodes = root.findAccessibilityNodeInfosByViewId("com.android.systemui:id/clock")
+                          var visible = false
+                          if (nodes != null) {
+                              for (n in nodes) {
+                                  if (n.isVisibleToUser) visible = true
+                                  n.recycle()
+                              }
+                          }
+                          root.recycle()
+                          if (visible) return true
+                      }
+                  } catch (_: Exception) {}
+                  return false
+              }
+
+              private fun show() {
+                  val v = clockView ?: return
+                  if (attached) return
+                  try {
+                      wm?.addView(v, params())
+                      attached = true
+                  } catch (_: Exception) {}
+              }
+
+              private fun hide() {
+                  val v = clockView ?: return
+                  if (!attached) return
+                  try { wm?.removeViewImmediate(v) } catch (_: Exception) {}
+                  attached = false
+              }
+
+              private fun applyStyle() {
+                  val v = clockView ?: return
+                  val p = Prefs.sp(this)
+
+                  v.format12Hour = if (p.getBoolean(Prefs.AMPM, false)) "h:mm a" else "h:mm"
+                  v.format24Hour = "HH:mm"
+                  v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, p.getFloat(Prefs.SIZE, Prefs.DEF_SIZE))
+
+                  val fontName = p.getString(Prefs.FONT, Prefs.DEF_FONT) ?: Prefs.DEF_FONT
+                  v.typeface = try { Typeface.create(fontName, Typeface.NORMAL) } catch (_: Exception) { Typeface.DEFAULT }
+
+                  val calibrating = p.getBoolean(Prefs.CAL, false)
+                  v.setTextColor(
+                      when {
+                          calibrating -> 0xFFFF3B30.toInt()
+                          p.getBoolean(Prefs.WHITE, true) -> Color.WHITE
+                          else -> Color.BLACK
+                      }
+                  )
+                  if (attached) {
+                      try { wm?.updateViewLayout(v, params()) } catch (_: Exception) {}
+                  }
+              }
+
+              private fun params(): WindowManager.LayoutParams {
+                  val d = resources.displayMetrics.density
+                  val p = Prefs.sp(this)
+                  val lp = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      statusBarHeightPx(),
+                      WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                          WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                          WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                          WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                      PixelFormat.TRANSLUCENT
+                  )
+                  lp.gravity = Gravity.TOP or Gravity.START
+                  lp.x = (p.getFloat(Prefs.X, Prefs.DEF_X) * d).toInt()
+                  lp.y = (p.getFloat(Prefs.Y, Prefs.DEF_Y) * d).toInt()
+                  if (Build.VERSION.SDK_INT >= 28) {
+                      lp.layoutInDisplayCutoutMode =
+                          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                  }
+                  lp.title = "KyroxStatusClock"
+                  return lp
+              }
+
+              private fun statusBarHeightPx(): Int {
+                  val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+                  return if (id > 0) resources.getDimensionPixelSize(id)
+                  else (24 * resources.displayMetrics.density).toInt()
+              }
+          }
+          KX_EOF
+          mkdir -p app/src/main/java/com/kyrox/statusclock
+          cat > app/src/main/java/com/kyrox/statusclock/MainActivity.kt <<'KX_EOF'
+          package com.kyrox.statusclock
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.content.SharedPreferences
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.view.ViewGroup
+          import android.widget.Button
+          import android.widget.CheckBox
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import java.util.Locale
+
+          class MainActivity : Activity() {
+
+              private lateinit var sp: SharedPreferences
+              private lateinit var statusText: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  sp = Prefs.sp(this)
+                  val dp = resources.displayMetrics.density
+                  fun px(v: Int) = (v * dp).toInt()
+
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(px(20), px(24), px(20), px(32))
+                  }
+
+                  root.addView(TextView(this).apply {
+                      text = "Kyrox Status Clock"
+                      textSize = 22f
+                  })
+
+                  statusText = TextView(this).apply { setPadding(0, px(8), 0, px(8)) }
+                  root.addView(statusText)
+
+                  root.addView(Button(this).apply {
+                      text = "1. Turn on in Accessibility settings"
+                      setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                  })
+
+                  root.addView(TextView(this).apply {
+                      setPadding(0, px(16), 0, px(4))
+                      text = "2. Line up the RED clock exactly on the real clock in this screen's status bar " +
+                          "(top-left). Red text over white text should look like one clock."
+                  })
+
+                  stepper(root, "X (dp from left)", Prefs.X, Prefs.DEF_X, 0.5f, "%.1f")
+                  stepper(root, "Y (dp from top)", Prefs.Y, Prefs.DEF_Y, 0.5f, "%.1f")
+                  stepper(root, "Size (dp)", Prefs.SIZE, Prefs.DEF_SIZE, 0.1f, "%.1f")
+
+                  root.addView(TextView(this).apply {
+                      setPadding(0, px(16), 0, 0)
+                      text = "Font family (system font name)"
+                  })
+                  val fontBox = EditText(this).apply {
+                      setText(sp.getString(Prefs.FONT, Prefs.DEF_FONT))
+                      setSingleLine(true)
+                  }
+                  root.addView(fontBox)
+                  root.addView(Button(this).apply {
+                      text = "Apply font"
+                      setOnClickListener {
+                          sp.edit().putString(Prefs.FONT, fontBox.text.toString().trim()).apply()
+                      }
+                  })
+
+                  root.addView(check("Show AM/PM (12-hour phones only)", Prefs.AMPM, false))
+                  root.addView(check("White text (untick for black)", Prefs.WHITE, true))
+                  root.addView(check("Smart mode (experimental): hide while the real clock is visible", Prefs.SMART, false))
+
+                  root.addView(Button(this).apply {
+                      text = "Reset to defaults"
+                      setOnClickListener {
+                          sp.edit()
+                              .putFloat(Prefs.X, Prefs.DEF_X)
+                              .putFloat(Prefs.Y, Prefs.DEF_Y)
+                              .putFloat(Prefs.SIZE, Prefs.DEF_SIZE)
+                              .putString(Prefs.FONT, Prefs.DEF_FONT)
+                              .apply()
+                          recreate()
+                      }
+                  })
+
+                  root.addView(TextView(this).apply {
+                      setPadding(0, px(16), 0, 0)
+                      text = "3. Go to the home screen. The clock shows only there. " +
+                          "If it disappears after a while, set this app's battery to 'No restrictions' " +
+                          "and enable Autostart in MIUI settings."
+                  })
+
+                  setContentView(ScrollView(this).apply {
+                      addView(root, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                  })
+              }
+
+              private fun stepper(root: LinearLayout, title: String, key: String, def: Float, step: Float, fmt: String) {
+                  val dp = resources.displayMetrics.density
+                  val label = TextView(this).apply {
+                      textSize = 16f
+                      gravity = Gravity.CENTER_VERTICAL
+                      layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  fun refresh() {
+                      label.text = title + ": " + String.format(Locale.US, fmt, sp.getFloat(key, def))
+                  }
+                  fun change(delta: Float) {
+                      sp.edit().putFloat(key, sp.getFloat(key, def) + delta).apply()
+                      refresh()
+                  }
+                  val minus = Button(this).apply { text = "−"; setOnClickListener { change(-step) } }
+                  val plus = Button(this).apply { text = "+"; setOnClickListener { change(step) } }
+                  val row = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(0, (8 * dp).toInt(), 0, 0)
+                      addView(label)
+                      addView(minus)
+                      addView(plus)
+                  }
+                  refresh()
+                  root.addView(row)
+              }
+
+              private fun check(text: String, key: String, def: Boolean): CheckBox =
+                  CheckBox(this).apply {
+                      this.text = text
+                      isChecked = sp.getBoolean(key, def)
+                      setOnCheckedChangeListener { _, on -> sp.edit().putBoolean(key, on).apply() }
+                  }
+
+              private fun serviceEnabled(): Boolean {
+                  val s = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                  return s != null && s.contains("$packageName/")
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  sp.edit().putBoolean(Prefs.CAL, true).apply()
+                  statusText.text = if (serviceEnabled()) "Status: ON (service running)" else "Status: OFF. Turn it on below."
+              }
+
+              override fun onPause() {
+                  sp.edit().putBoolean(Prefs.CAL, false).apply()
+                  super.onPause()
+              }
+          }
+          KX_EOF
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KyroxStatusClock-APK
+          path: app/build/outputs/apk/debug/*.apk
