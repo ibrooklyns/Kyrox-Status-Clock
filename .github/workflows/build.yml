@@ -148,13 +148,14 @@ jobs:
               const val AMPM = "show_ampm"    // 12-hour mode only
               const val WHITE = "white_text"
               const val SMART = "smart_mode"  // hide overlay while the real clock is visible
-              const val FONT = "font_family"
+              const val FONT = "font_family"  // family name OR absolute path to a font file
+              const val WGHT = "font_weight"  // variable-font weight (100-900), 0 = font default
               const val CAL = "calibrating"   // true while the settings screen is open
 
               const val DEF_X = 20f
               const val DEF_Y = 0f
               const val DEF_SIZE = 15.8f      // status_bar_clock_size from your theme
-              const val DEF_FONT = "mipro-medium"
+              const val DEF_FONT = "sans-serif"
 
               fun sp(c: Context): SharedPreferences = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
           }
@@ -346,7 +347,10 @@ jobs:
                   v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, p.getFloat(Prefs.SIZE, Prefs.DEF_SIZE))
 
                   val fontName = p.getString(Prefs.FONT, Prefs.DEF_FONT) ?: Prefs.DEF_FONT
-                  v.typeface = try { Typeface.create(fontName, Typeface.NORMAL) } catch (_: Exception) { Typeface.DEFAULT }
+                  v.typeface = loadTypeface(fontName)
+                  val w = p.getFloat(Prefs.WGHT, 0f).toInt()
+                  // Variable fonts (e.g. MiLanProVF / MiSansVF) take their weight from this axis.
+                  v.setFontVariationSettings(if (w >= 1) "'wght' $w" else null)
 
                   val calibrating = p.getBoolean(Prefs.CAL, false)
                   v.setTextColor(
@@ -358,6 +362,15 @@ jobs:
                   )
                   if (attached) {
                       try { wm?.updateViewLayout(v, params()) } catch (_: Exception) {}
+                  }
+              }
+
+              private fun loadTypeface(name: String): Typeface {
+                  return try {
+                      if (name.startsWith("/")) Typeface.createFromFile(name)
+                      else Typeface.create(name, Typeface.NORMAL)
+                  } catch (_: Exception) {
+                      Typeface.DEFAULT
                   }
               }
 
@@ -397,6 +410,7 @@ jobs:
           package com.kyrox.statusclock
 
           import android.app.Activity
+          import android.app.AlertDialog
           import android.content.Intent
           import android.content.SharedPreferences
           import android.os.Bundle
@@ -409,6 +423,7 @@ jobs:
           import android.widget.LinearLayout
           import android.widget.ScrollView
           import android.widget.TextView
+          import java.io.File
           import java.util.Locale
 
           class MainActivity : Activity() {
@@ -449,10 +464,11 @@ jobs:
                   stepper(root, "X (dp from left)", Prefs.X, Prefs.DEF_X, 0.5f, "%.1f")
                   stepper(root, "Y (dp from top)", Prefs.Y, Prefs.DEF_Y, 0.5f, "%.1f")
                   stepper(root, "Size (dp)", Prefs.SIZE, Prefs.DEF_SIZE, 0.1f, "%.1f")
+                  stepper(root, "Weight (0 = font default)", Prefs.WGHT, 0f, 50f, "%.0f")
 
                   root.addView(TextView(this).apply {
                       setPadding(0, px(16), 0, 0)
-                      text = "Font family (system font name)"
+                      text = "Font: family name or full file path"
                   })
                   val fontBox = EditText(this).apply {
                       setText(sp.getString(Prefs.FONT, Prefs.DEF_FONT))
@@ -463,6 +479,27 @@ jobs:
                       text = "Apply font"
                       setOnClickListener {
                           sp.edit().putString(Prefs.FONT, fontBox.text.toString().trim()).apply()
+                      }
+                  })
+                  root.addView(Button(this).apply {
+                      text = "Pick from installed font files"
+                      setOnClickListener {
+                          val files = findFonts()
+                          if (files.isEmpty()) {
+                              AlertDialog.Builder(this@MainActivity)
+                                  .setMessage("No readable font files found.")
+                                  .setPositiveButton("OK", null)
+                                  .show()
+                          } else {
+                              val names = files.map { File(it).name }.toTypedArray()
+                              AlertDialog.Builder(this@MainActivity)
+                                  .setTitle("Pick a font (Mi... fonts first)")
+                                  .setItems(names) { _, which ->
+                                      fontBox.setText(files[which])
+                                      sp.edit().putString(Prefs.FONT, files[which]).apply()
+                                  }
+                                  .show()
+                          }
                       }
                   })
 
@@ -478,6 +515,7 @@ jobs:
                               .putFloat(Prefs.Y, Prefs.DEF_Y)
                               .putFloat(Prefs.SIZE, Prefs.DEF_SIZE)
                               .putString(Prefs.FONT, Prefs.DEF_FONT)
+                              .putFloat(Prefs.WGHT, 0f)
                               .apply()
                           recreate()
                       }
@@ -521,6 +559,22 @@ jobs:
                   }
                   refresh()
                   root.addView(row)
+              }
+
+              private fun findFonts(): List<String> {
+                  val dirs = listOf("/system/fonts", "/system_ext/fonts", "/product/fonts", "/system/product/fonts", "/vendor/fonts")
+                  val out = mutableListOf<String>()
+                  for (d in dirs) {
+                      try {
+                          File(d).listFiles()?.forEach { f ->
+                              val n = f.name.lowercase()
+                              if (f.isFile && (n.endsWith(".ttf") || n.endsWith(".otf") || n.endsWith(".ttc"))) {
+                                  out.add(f.absolutePath)
+                              }
+                          }
+                      } catch (_: Exception) {}
+                  }
+                  return out.sortedWith(compareBy({ !File(it).name.lowercase().startsWith("mi") }, { File(it).name.lowercase() }))
               }
 
               private fun check(text: String, key: String, def: Boolean): CheckBox =
