@@ -55,8 +55,8 @@ jobs:
                   applicationId = "com.kyrox.statusclock"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 4
-                  versionName = "1.3"
+                  versionCode = 5
+                  versionName = "1.4"
               }
               buildTypes {
                   release { isMinifyEnabled = false }
@@ -220,6 +220,7 @@ jobs:
           import android.os.PowerManager
           import android.util.TypedValue
           import android.view.Gravity
+          import android.view.View
           import android.view.WindowManager
           import android.view.accessibility.AccessibilityEvent
           import android.widget.TextClock
@@ -233,6 +234,7 @@ jobs:
               private var lastPkg: String? = null
               private var homePkgs: Set<String> = setOf()
               private var isCurrentlyShowing = false
+              private var clockWidth: Int = 0
               private val handler = Handler(Looper.getMainLooper())
 
               private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
@@ -376,9 +378,14 @@ jobs:
                   val v = clockView ?: return
                   val p = Prefs.sp(this)
 
-                  v.format12Hour = if (p.getBoolean(Prefs.AMPM, false)) "h:mm a" else "h:mm"
+                  // Use hh:mm to ensure the hour is always two digits, preventing width shifts.
+                  v.format12Hour = if (p.getBoolean(Prefs.AMPM, false)) "hh:mm a" else "hh:mm"
                   v.format24Hour = "HH:mm"
                   v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, p.getFloat(Prefs.SIZE, Prefs.DEF_SIZE))
+                  
+                  // Force tabular numbers and left alignment to lock positions.
+                  v.fontFeatureSettings = "tnum"
+                  v.textAlignment = View.TEXT_ALIGNMENT_VIEW_START
 
                   val fontName = p.getString(Prefs.FONT, Prefs.DEF_FONT) ?: Prefs.DEF_FONT
                   val weight = p.getFloat(Prefs.WGHT, 0f).toInt()
@@ -394,6 +401,13 @@ jobs:
                   } else {
                       v.setFontVariationSettings(null)
                   }
+
+                  // Measure the maximum possible width to lock the view size.
+                  val paint = v.paint
+                  val maxText = if (p.getBoolean(Prefs.AMPM, false)) "88:88 AM" else "88:88"
+                  val textWidth = paint.measureText(maxText).toInt()
+                  val padding = (6 * resources.displayMetrics.density).toInt()
+                  clockWidth = textWidth + padding
 
                   val calibrating = p.getBoolean(Prefs.CAL, false)
                   val autoColor = p.getBoolean(Prefs.AUTO_COLOR, true)
@@ -416,8 +430,9 @@ jobs:
               private fun params(): WindowManager.LayoutParams {
                   val d = resources.displayMetrics.density
                   val p = Prefs.sp(this)
+                  val width = if (clockWidth > 0) clockWidth else WindowManager.LayoutParams.WRAP_CONTENT
                   val lp = WindowManager.LayoutParams(
-                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      width,
                       statusBarHeightPx(),
                       WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                       WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
