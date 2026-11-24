@@ -55,8 +55,8 @@ jobs:
                   applicationId = "com.kyrox.statusclock"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 2
-                  versionName = "1.1"
+                  versionCode = 3
+                  versionName = "1.2"
               }
               buildTypes {
                   release { isMinifyEnabled = false }
@@ -189,6 +189,7 @@ jobs:
               const val FONT = "font_family"
               const val WGHT = "font_weight"
               const val CAL = "calibrating"
+              const val UI_DARK = "ui_dark"
 
               const val DEF_X = 20f
               const val DEF_Y = 0f
@@ -288,7 +289,6 @@ jobs:
                   if (e.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED && 
                       !Prefs.sp(this).getBoolean(Prefs.SMART, false)) return
                   
-                  // Debounce rapid events
                   handler.removeCallbacksAndMessages(null)
                   handler.postDelayed({ evaluate() }, 50)
               }
@@ -450,7 +450,6 @@ jobs:
           import android.graphics.Typeface
           import android.os.Build
           import java.io.File
-          import java.util.zip.ZipFile
 
           object FontResolver {
               fun resolve(fontName: String, weight: Int): Typeface {
@@ -486,7 +485,6 @@ jobs:
           import android.app.AlertDialog
           import android.content.Intent
           import android.content.SharedPreferences
-          import android.net.Uri
           import android.os.Bundle
           import android.provider.Settings
           import android.view.Gravity
@@ -505,12 +503,16 @@ jobs:
 
               private lateinit var sp: SharedPreferences
               private lateinit var statusText: TextView
-              private var uploadedFontPath: String? = null
               private val PICK_FONT = 1001
 
               override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
                   sp = Prefs.sp(this)
+                  if (sp.getBoolean(Prefs.UI_DARK, false)) {
+                      setTheme(android.R.style.Theme_Material_NoActionBar)
+                  } else {
+                      setTheme(android.R.style.Theme_Material_Light_NoActionBar)
+                  }
+                  super.onCreate(savedInstanceState)
                   val dp = resources.displayMetrics.density
                   fun px(v: Int) = (v * dp).toInt()
 
@@ -538,10 +540,10 @@ jobs:
                           "(top-left). Red text over white text should look like one clock."
                   })
 
-                  stepper(root, "X (dp from left)", Prefs.X, Prefs.DEF_X, 0.5f, "%.1f")
-                  stepper(root, "Y (dp from top)", Prefs.Y, Prefs.DEF_Y, 0.5f, "%.1f")
-                  stepper(root, "Size (dp)", Prefs.SIZE, Prefs.DEF_SIZE, 0.1f, "%.1f")
-                  stepper(root, "Weight (0 = font default)", Prefs.WGHT, 0f, 50f, "%.0f")
+                  stepper(root, "X (dp from left)", Prefs.X, Prefs.DEF_X, 1.0f, 0.1f, "%.2f")
+                  stepper(root, "Y (dp from top)", Prefs.Y, Prefs.DEF_Y, 1.0f, 0.1f, "%.2f")
+                  stepper(root, "Size (dp)", Prefs.SIZE, Prefs.DEF_SIZE, 0.5f, 0.05f, "%.2f")
+                  stepper(root, "Weight (0 = default)", Prefs.WGHT, 0f, 50f, 10f, "%.0f")
 
                   root.addView(TextView(this).apply {
                       setPadding(0, px(16), 0, 0)
@@ -588,6 +590,13 @@ jobs:
                   root.addView(check("Auto Day/Night color (Black Day / White Night)", Prefs.AUTO_COLOR, true))
                   root.addView(check("Force White text", Prefs.WHITE, true))
                   root.addView(check("Smart mode: hide while the real clock is visible", Prefs.SMART, false))
+                  
+                  val darkModeCheck = check("Dark Mode (App Interface)", Prefs.UI_DARK, false)
+                  darkModeCheck.setOnCheckedChangeListener { _, on ->
+                      sp.edit().putBoolean(Prefs.UI_DARK, on).apply()
+                      recreate()
+                  }
+                  root.addView(darkModeCheck)
 
                   root.addView(Button(this).apply {
                       text = "Reset to defaults"
@@ -616,29 +625,34 @@ jobs:
                   })
               }
 
-              private fun stepper(root: LinearLayout, title: String, key: String, def: Float, step: Float, fmt: String) {
+              private fun stepper(root: LinearLayout, title: String, key: String, def: Float, coarseStep: Float, fineStep: Float, fmt: String) {
                   val dp = resources.displayMetrics.density
                   val label = TextView(this).apply {
-                      textSize = 16f
+                      textSize = 14f
                       gravity = Gravity.CENTER_VERTICAL
                       layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                   }
                   fun refresh() {
-                      label.text = title + ": " + String.format(Locale.US, fmt, sp.getFloat(key, def))
+                      label.text = title + "\n" + String.format(Locale.US, fmt, sp.getFloat(key, def))
                   }
                   fun change(delta: Float) {
                       sp.edit().putFloat(key, sp.getFloat(key, def) + delta).apply()
                       refresh()
                   }
-                  val minus = Button(this).apply { text = "−"; setOnClickListener { change(-step) } }
-                  val plus = Button(this).apply { text = "+"; setOnClickListener { change(step) } }
+                  val minusCoarse = Button(this).apply { text = "--"; textSize = 12f; setOnClickListener { change(-coarseStep) } }
+                  val minusFine = Button(this).apply { text = "-"; textSize = 12f; setOnClickListener { change(-fineStep) } }
+                  val plusFine = Button(this).apply { text = "+"; textSize = 12f; setOnClickListener { change(fineStep) } }
+                  val plusCoarse = Button(this).apply { text = "++"; textSize = 12f; setOnClickListener { change(coarseStep) } }
+                  
                   val row = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                       setPadding(0, (8 * dp).toInt(), 0, 0)
                       addView(label)
-                      addView(minus)
-                      addView(plus)
+                      addView(minusCoarse)
+                      addView(minusFine)
+                      addView(plusFine)
+                      addView(plusCoarse)
                   }
                   refresh()
                   root.addView(row)
@@ -683,7 +697,6 @@ jobs:
                               input.copyTo(output)
                               input.close()
                               output.close()
-                              uploadedFontPath = target.absolutePath
                               sp.edit().putString(Prefs.FONT, target.absolutePath).apply()
                               AlertDialog.Builder(this).setMessage("Font uploaded and applied!").setPositiveButton("OK", null).show()
                           } catch (e: Exception) {
