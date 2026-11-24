@@ -55,8 +55,8 @@ jobs:
                   applicationId = "com.kyrox.statusclock"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 3
-                  versionName = "1.2"
+                  versionCode = 4
+                  versionName = "1.3"
               }
               buildTypes {
                   release { isMinifyEnabled = false }
@@ -627,32 +627,56 @@ jobs:
 
               private fun stepper(root: LinearLayout, title: String, key: String, def: Float, coarseStep: Float, fineStep: Float, fmt: String) {
                   val dp = resources.displayMetrics.density
+                  fun px(v: Int) = (v * dp).toInt()
+
                   val label = TextView(this).apply {
                       textSize = 14f
                       gravity = Gravity.CENTER_VERTICAL
                       layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                   }
                   fun refresh() {
-                      label.text = title + "\n" + String.format(Locale.US, fmt, sp.getFloat(key, def))
+                      label.text = "$title\n" + String.format(Locale.US, fmt, sp.getFloat(key, def))
                   }
                   fun change(delta: Float) {
                       sp.edit().putFloat(key, sp.getFloat(key, def) + delta).apply()
                       refresh()
                   }
-                  val minusCoarse = Button(this).apply { text = "--"; textSize = 12f; setOnClickListener { change(-coarseStep) } }
-                  val minusFine = Button(this).apply { text = "-"; textSize = 12f; setOnClickListener { change(-fineStep) } }
-                  val plusFine = Button(this).apply { text = "+"; textSize = 12f; setOnClickListener { change(fineStep) } }
-                  val plusCoarse = Button(this).apply { text = "++"; textSize = 12f; setOnClickListener { change(coarseStep) } }
-                  
+
+                  fun makeBtn(text: String, delta: Float): Button {
+                      return Button(this).apply {
+                          this.text = text
+                          textSize = 11f
+                          minHeight = 0
+                          minWidth = 0
+                          setPadding(px(6), px(4), px(6), px(4))
+                          layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                              marginStart = px(2)
+                              marginEnd = px(2)
+                          }
+                          setOnClickListener { change(delta) }
+                      }
+                  }
+
                   val row = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
-                      setPadding(0, (8 * dp).toInt(), 0, 0)
+                      setPadding(0, px(8), 0, px(8))
                       addView(label)
-                      addView(minusCoarse)
-                      addView(minusFine)
-                      addView(plusFine)
-                      addView(plusCoarse)
+                      
+                      addView(makeBtn("-${String.format(Locale.US, fmt, coarseStep)}", -coarseStep))
+                      
+                      val fineLabel = TextView(this@MainActivity).apply {
+                          text = "Fine:"
+                          textSize = 10f
+                          gravity = Gravity.CENTER_VERTICAL
+                          setPadding(px(4), 0, px(4), 0)
+                      }
+                      addView(fineLabel)
+                      
+                      addView(makeBtn("-${String.format(Locale.US, fmt, fineStep)}", -fineStep))
+                      addView(makeBtn("+${String.format(Locale.US, fmt, fineStep)}", fineStep))
+                      
+                      addView(makeBtn("+${String.format(Locale.US, fmt, coarseStep)}", coarseStep))
                   }
                   refresh()
                   root.addView(row)
