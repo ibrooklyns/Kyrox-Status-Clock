@@ -502,11 +502,17 @@ jobs:
 
               override fun onAccessibilityEvent(event: AccessibilityEvent?) {
                   val e = event ?: return
-                  val pkg = e.packageName?.toString() ?: return
+                  // Note: TYPE_WINDOWS_CHANGED events usually have no package name, so it can be null here.
+                  val pkg = e.packageName?.toString()
                   if (pkg == packageName) return
 
                   when (e.eventType) {
+                      // Smart mode: the status bar / its clock appearing or disappearing shows up here.
+                      AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                          if (smart && !calibrating) schedule(120)
+                      }
                       AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                          if (pkg == null) return
                           lastPkg = pkg
                           if (calibrating) return
                           when {
@@ -521,7 +527,8 @@ jobs:
                           }
                       }
                       AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                          if (!shown) return
+                          // In smart mode a scroll on the home screen can bring the real clock back.
+                          if (!shown && !smart) return
                           if (smart) schedule(120)
                           if (colorMode == Prefs.MODE_BACKGROUND) {
                               handler.removeCallbacks(sampleRunnable)
@@ -562,6 +569,7 @@ jobs:
                   try {
                       val info = serviceInfo ?: return
                       var t = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                      if (smart) t = t or AccessibilityEvent.TYPE_WINDOWS_CHANGED
                       if (smart || colorMode == Prefs.MODE_BACKGROUND) t = t or AccessibilityEvent.TYPE_VIEW_SCROLLED
                       if (info.eventTypes != t) {
                           info.eventTypes = t
