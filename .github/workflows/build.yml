@@ -351,6 +351,10 @@ jobs:
               private var tickerOn = false
               private var shotInFlight = false
               private var lastShotAt = 0L
+              private var smartVerdict: Boolean? = null   // null = unknown, true = real clock is drawn at our spot
+              private var smartBusy = false
+              private var smartCheckAt = 0L
+              private var smartFails = 0
 
               private val clockIds = listOf("com.android.systemui:id/clock", "com.android.systemui:id/clock_text")
 
@@ -361,7 +365,7 @@ jobs:
               }
 
               private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-                  handler.post { safe { applyStyle(); evaluate() } }
+                  handler.post { safe { smartVerdict = null; applyStyle(); evaluate() } }
               }
 
               private val screenReceiver = object : BroadcastReceiver() {
@@ -387,12 +391,18 @@ jobs:
                   }
               }
 
+              private val smartRunnable = Runnable { safe { smartCapture() } }
+
               // While on the home screen: re-check Smart mode and re-sample the background colour once a second.
               private val ticker = object : Runnable {
                   override fun run() {
                       if (!tickerOn) return
                       safe {
-                          if (smartOn()) evaluate()
+                          if (smartOn()) {
+                              // Hidden because the real clock was drawn: keep polling (invisible, no blink).
+                              if (smartVerdict == true) smartVerdict = null
+                              evaluate()
+                          }
                           requestColorSample(false)
                       }
                       if (tickerOn) handler.postDelayed(this, 1000)
@@ -468,12 +478,16 @@ jobs:
                           evaluate()
                       }
                       AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                          if (smartOn()) scheduleEval(150)
+                          // Re-check at most every 5 s while our clock is shown (a re-check blinks it for a moment).
+                          if (smartOn() && smartVerdict == false &&
+                              SystemClock.elapsedRealtime() - smartCheckAt > 5000) {
+                              smartVerdict = null
+                              scheduleEval(600)
+                          }
                       }
                       AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                           if (pkg == packageName) return
                           requestColorSample(false)
-                          if (smartOn()) scheduleEval(150)
                       }
                   }
               }
@@ -544,11 +558,13 @@ jobs:
                   if (!onHome) { setShown(false); return }
 
                   if (p.getBoolean(Prefs.SMART, false)) {
-                      if (realClockVisible()) { smartMiss = 0; setShown(false); return }
-                      // Real clock not seen. Require two misses in a row before drawing ours,
-                      // so a single failed read can no longer make the clock flicker or double up.
-                      smartMiss++
-                      if (!shown && smartMiss < 2) { scheduleEval(250); return }
+                      if (Build.VERSION.SDK_INT < 30) {
+                          if (realClockVisible()) { setShown(false); return }
+                      } else {
+                          val verdict = smartVerdict
+                          if (verdict == null) { setShown(false); startSmartCheck(); return }
+                          if (verdict) { setShown(false); return }
+                      }
                   }
                   setShown(true)
               }
@@ -556,11 +572,71 @@ jobs:
               private fun setOnHome(on: Boolean) {
                   if (on == tickerOn) return
                   tickerOn = on
+                  if (on) smartVerdict = null
                   handler.removeCallbacks(ticker)
                   if (on) handler.postDelayed(ticker, 1000)
               }
 
               // ---------------------------------------------------------------- real clock detection (Smart mode)
+
+              // Smart mode (Android 11+): hide our clock for a moment, take a screenshot and look at the pixels where
+              // the clock sits. White/black text-like pixels there mean the system is drawing its own clock.
+              private fun startSmartCheck() {
+                  if (smartBusy) return
+                  val now = SystemClock.elapsedRealtime()
+                  if (now - smartCheckAt < 1200) return      // the ticker retries
+                  smartBusy = true
+                  smartCheckAt = now
+                  handler.postDelayed(smartRunnable, 150)     // let the hidden overlay's frame disappear
+              }
+
+              private fun smartCapture() {
+                  if (Build.VERSION.SDK_INT < 30) { smartBusy = false; return }
+                  val now = SystemClock.elapsedRealtime()
+                  val wait = 1100L - (now - lastShotAt)
+                  if (wait > 0) { handler.postDelayed(smartRunnable, wait); return }
+                  lastShotAt = now
+                  try {
+                      takeScreenshot(Display.DEFAULT_DISPLAY, worker, object : AccessibilityService.TakeScreenshotCallback {
+                          override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                              val r = try { analyze(screenshot) } catch (_: Throwable) { null }
+                              handler.post {
+                                  smartBusy = false
+                                  safe {
+                                      if (r != null) {
+                                          smartFails = 0
+                                          applyLuma(r[0])
+                                          val real = r[1] >= 0.04f
+                                          smartVerdict = real
+                                          Diag.smart = "text pixels " + Math.round(r[1] * 100) + "% -> " +
+                                              (if (real) "real clock drawn (ours hidden)" else "no real clock (ours shown)")
+                                      } else {
+                                          failSmart("could not read screenshot")
+                                      }
+                                      evaluate()
+                                  }
+                              }
+                          }
+
+                          override fun onFailure(errorCode: Int) {
+                              handler.post {
+                                  smartBusy = false
+                                  safe { failSmart("screenshot error " + errorCode); evaluate() }
+                              }
+                          }
+                      })
+                  } catch (_: Throwable) {
+                      smartBusy = false
+                      failSmart("screenshot not allowed")
+                  }
+              }
+
+              // After a few failed checks in a row, show the clock anyway rather than leaving it hidden forever.
+              private fun failSmart(why: String) {
+                  smartFails++
+                  Diag.smart = why + " (" + smartFails + ")"
+                  if (smartFails >= 3) smartVerdict = false
+              }
 
               // Returns a short description of the real status bar clock if one is visible
               // at the spot where our clock sits, otherwise null.
@@ -665,11 +741,10 @@ jobs:
                   try {
                       takeScreenshot(Display.DEFAULT_DISPLAY, worker, object : AccessibilityService.TakeScreenshotCallback {
                           override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-                              var luma = -1f
-                              try { luma = sampleLuma(screenshot) } catch (_: Throwable) {}
+                              val r = try { analyze(screenshot) } catch (_: Throwable) { null }
                               handler.post {
                                   shotInFlight = false
-                                  if (luma >= 0f) safe { applyLuma(luma) }
+                                  if (r != null) safe { applyLuma(r[0]) }
                               }
                           }
 
@@ -682,45 +757,73 @@ jobs:
                   }
               }
 
-              // Median brightness of the strip behind the status bar, next to (not under) our own clock.
-              // Pixels that are almost pure black are ignored so the camera cut-out does not skew the result.
-              private fun sampleLuma(result: AccessibilityService.ScreenshotResult): Float {
+              // Returns [median brightness of the strip behind the status bar, fraction of text-like pixels where our
+              // clock sits]. Pixels that are almost pure black are ignored for the brightness so the camera
+              // cut-out does not skew it.
+              private fun analyze(result: AccessibilityService.ScreenshotResult): FloatArray? {
                   val hb = result.hardwareBuffer
                   try {
-                      val hw = Bitmap.wrapHardwareBuffer(hb, result.colorSpace) ?: return -1f
+                      val hw = Bitmap.wrapHardwareBuffer(hb, result.colorSpace) ?: return null
                       val bmp = hw.copy(Bitmap.Config.ARGB_8888, false)
                       hw.recycle()
-                      if (bmp == null) return -1f
+                      if (bmp == null) return null
 
                       val d = resources.displayMetrics.density
                       val bandH = minOf(statusBarHeightPx(), bmp.height)
                       val left = Prefs.sp(this).getFloat(Prefs.X, Prefs.DEF_X) * d
                       val clockL = (left - 4 * d).toInt()
                       val clockR = (left + clockWidth + 4 * d).toInt()
+
+                      // 1) background brightness, left part of the bar but not under our clock
                       val maxX = (bmp.width * 0.45f).toInt()
                       val step = maxOf(1, maxX / 30)
                       val rows = intArrayOf(bandH / 4, bandH / 2, (bandH * 3) / 4)
-
                       val vals = ArrayList<Float>()
                       var x = 0
                       while (x < maxX) {
                           if (x < clockL || x > clockR) {
-                              for (y in rows) {
-                                  val c = bmp.getPixel(x, y)
-                                  val l = (0.299f * Color.red(c) + 0.587f * Color.green(c) + 0.114f * Color.blue(c)) / 255f
-                                  if (l > 0.02f) vals.add(l)
-                              }
+                              for (y in rows) vals.add(lumaAt(bmp.getPixel(x, y)))
                           }
                           x += step
                       }
+                      val lit = ArrayList<Float>()
+                      for (v in vals) if (v > 0.02f) lit.add(v)
+                      lit.sort()
+                      val luma = if (lit.isEmpty()) 0f else lit[lit.size / 2]
+
+                      // 2) text-like pixels inside our clock's box (only meaningful while our overlay is hidden)
+                      val x0 = maxOf(0, left.toInt())
+                      val x1 = minOf(bmp.width - 1, (left + clockWidth).toInt())
+                      val box = ArrayList<Float>()
+                      var yy = 0
+                      while (yy < bandH) {
+                          var xx = x0
+                          while (xx <= x1) {
+                              box.add(lumaAt(bmp.getPixel(xx, yy)))
+                              xx += 2
+                          }
+                          yy += 2
+                      }
+                      var frac = 0f
+                      if (box.size > 20) {
+                          val sorted = ArrayList<Float>(box)
+                          sorted.sort()
+                          val med = sorted[sorted.size / 2]
+                          var hit = 0
+                          for (l in box) {
+                              if (Math.abs(l - med) > 0.35f && (l > 0.85f || l < 0.15f)) hit++
+                          }
+                          frac = hit.toFloat() / box.size
+                      }
                       bmp.recycle()
-                      if (vals.isEmpty()) return 0f
-                      vals.sort()
-                      return vals[vals.size / 2]
+                      return floatArrayOf(luma, frac)
                   } finally {
                       try { hb.close() } catch (_: Throwable) {}
                   }
               }
+
+              private fun lumaAt(c: Int): Float =
+                  (0.299f * Color.red(c) + 0.587f * Color.green(c) + 0.114f * Color.blue(c)) / 255f
 
               // ---------------------------------------------------------------- style / layout
 
