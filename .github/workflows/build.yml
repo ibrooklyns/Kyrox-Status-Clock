@@ -55,8 +55,8 @@ jobs:
                   applicationId = "com.kyrox.statusclock"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 6
-                  versionName = "1.5"
+                  versionCode = 7
+                  versionName = "1.6"
               }
               buildTypes {
                   release { isMinifyEnabled = false }
@@ -72,6 +72,9 @@ jobs:
           cat > app/src/main/AndroidManifest.xml <<'KX_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
 
               <queries>
                   <intent>
@@ -108,6 +111,20 @@ jobs:
                           android:name="android.accessibilityservice"
                           android:resource="@xml/accessibility_config" />
                   </service>
+
+                  <receiver
+                      android:name=".BootReceiver"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                          <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                      </intent-filter>
+                  </receiver>
+
+                  <service
+                      android:name=".HealJob"
+                      android:exported="false"
+                      android:permission="android.permission.BIND_JOB_SERVICE" />
               </application>
           </manifest>
           KX_EOF
@@ -119,14 +136,15 @@ jobs:
               android:accessibilityFeedbackType="feedbackGeneric"
               android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
               android:canRetrieveWindowContent="true"
+              android:canTakeScreenshot="true"
               android:description="@string/service_description"
-              android:notificationTimeout="50" />
+              android:notificationTimeout="0" />
           KX_EOF
           mkdir -p app/src/main/res/values
           cat > app/src/main/res/values/strings.xml <<'KX_EOF'
           <resources>
               <string name="app_name">Kyrox Status Clock</string>
-              <string name="service_description">Draws a clock at the status bar clock position, only while the home screen is showing. It does not read, store or send anything you do on screen.</string>
+              <string name="service_description">Draws a clock at the status bar clock position, only while the home screen is showing. It briefly looks at the colour of the strip behind the status bar to pick black or white text. Nothing is stored or sent anywhere.</string>
           </resources>
           KX_EOF
           cat > app/src/main/res/values/themes.xml <<'KX_EOF'
@@ -182,14 +200,12 @@ jobs:
               const val X = "x_dp"
               const val Y = "y_dp"
               const val SIZE = "size_dp"
-              const val AMPM = "show_ampm"
-              const val WHITE = "white_text"
-              const val AUTO_COLOR = "auto_color"
               const val SMART = "smart_mode"
               const val FONT = "font_family"
               const val WGHT = "font_weight"
               const val CAL = "calibrating"
               const val UI_DARK = "ui_dark"
+              const val HEAL = "auto_heal"
 
               const val DEF_X = 20f
               const val DEF_Y = 0f
@@ -200,10 +216,90 @@ jobs:
           }
           KX_EOF
           mkdir -p app/src/main/java/com/kyrox/statusclock
+          mkdir -p app/src/main/java/com/kyrox/statusclock
+          cat > app/src/main/java/com/kyrox/statusclock/Healer.kt <<'KX_EOF'
+          package com.kyrox.statusclock
+
+          import android.app.job.JobInfo
+          import android.app.job.JobParameters
+          import android.app.job.JobScheduler
+          import android.app.job.JobService
+          import android.content.BroadcastReceiver
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.provider.Settings
+
+          // Optional self-recovery. Android only lets an app switch its own accessibility service back on
+          // if it holds WRITE_SECURE_SETTINGS, which must be granted once from a computer:
+          //   adb shell pm grant com.kyrox.statusclock android.permission.WRITE_SECURE_SETTINGS
+          object Healer {
+              private const val PERM = "android.permission.WRITE_SECURE_SETTINGS"
+              private const val JOB_ID = 4711
+
+              fun canHeal(c: Context): Boolean =
+                  c.checkSelfPermission(PERM) == PackageManager.PERMISSION_GRANTED
+
+              private fun component(c: Context) = ComponentName(c, ClockOverlayService::class.java)
+
+              fun isEnabled(c: Context): Boolean {
+                  val s = Settings.Secure.getString(c.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                      ?: return false
+                  val full = component(c).flattenToString()
+                  val short = component(c).flattenToShortString()
+                  return s.split(':').any { it.equals(full, true) || it.equals(short, true) }
+              }
+
+              fun ensure(c: Context) {
+                  try {
+                      if (!canHeal(c)) return
+                      if (!Prefs.sp(c).getBoolean(Prefs.HEAL, true)) return
+                      if (isEnabled(c)) return
+                      val cr = c.contentResolver
+                      val cur = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+                      val id = component(c).flattenToString()
+                      val next = if (cur.isEmpty()) id else cur + ":" + id
+                      Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, next)
+                      Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                  } catch (_: Throwable) {}
+              }
+
+              fun schedule(c: Context) {
+                  try {
+                      if (!canHeal(c)) return
+                      val js = c.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
+                      if (js.getPendingJob(JOB_ID) != null) return
+                      val job = JobInfo.Builder(JOB_ID, ComponentName(c, HealJob::class.java))
+                          .setPeriodic(15 * 60 * 1000L)
+                          .setPersisted(true)
+                          .build()
+                      js.schedule(job)
+                  } catch (_: Throwable) {}
+              }
+          }
+
+          class BootReceiver : BroadcastReceiver() {
+              override fun onReceive(context: Context, intent: Intent?) {
+                  Healer.ensure(context)
+                  Healer.schedule(context)
+              }
+          }
+
+          class HealJob : JobService() {
+              override fun onStartJob(params: JobParameters?): Boolean {
+                  Healer.ensure(this)
+                  return false
+              }
+
+              override fun onStopJob(params: JobParameters?): Boolean = false
+          }
+          KX_EOF
           cat > app/src/main/java/com/kyrox/statusclock/ClockOverlayService.kt <<'KX_EOF'
           package com.kyrox.statusclock
 
           import android.accessibilityservice.AccessibilityService
+          import android.app.KeyguardManager
           import android.content.BroadcastReceiver
           import android.content.Context
           import android.content.Intent
@@ -211,179 +307,432 @@ jobs:
           import android.content.SharedPreferences
           import android.content.pm.PackageManager
           import android.content.res.Configuration
+          import android.graphics.Bitmap
           import android.graphics.Color
           import android.graphics.PixelFormat
+          import android.graphics.Rect
           import android.graphics.Typeface
           import android.os.Build
           import android.os.Handler
           import android.os.Looper
           import android.os.PowerManager
+          import android.os.SystemClock
           import android.util.TypedValue
+          import android.view.Display
           import android.view.Gravity
           import android.view.View
           import android.view.WindowManager
           import android.view.accessibility.AccessibilityEvent
+          import android.view.accessibility.AccessibilityNodeInfo
+          import android.view.accessibility.AccessibilityWindowInfo
+          import android.view.inputmethod.InputMethodManager
           import android.widget.TextClock
-          import java.io.File
+          import java.util.concurrent.Executors
 
           class ClockOverlayService : AccessibilityService() {
 
+              private val handler = Handler(Looper.getMainLooper())
+              private val worker = Executors.newSingleThreadExecutor()
+
               private var wm: WindowManager? = null
               private var clockView: TextClock? = null
-              private var attached = false
+              private var attached = false      // overlay window is added to the WindowManager (kept for the whole service life)
+              private var shown = false         // overlay is currently visible
               private var lastPkg: String? = null
-              private var homePkgs: Set<String> = setOf()
-              private var isCurrentlyShowing = false
-              private var clockWidth: Int = 0
-              private val handler = Handler(Looper.getMainLooper())
+              private var homePkgs: Set<String> = emptySet()
+              private var imePkgs: Set<String> = emptySet()
+              private var clockWidth = 0
+              private var darkText = false      // automatic colour: true = black text, false = white text
+              private var smartMiss = 0
+              private var tickerOn = false
+              private var shotInFlight = false
+              private var lastShotAt = 0L
+
+              private val clockIds = listOf("com.android.systemui:id/clock", "com.android.systemui:id/clock_text")
+              private val timeRegex = Regex("\\d{1,2}[:.]\\d{2}(\\s?[AaPp][Mm])?")
+
+              // Every callback is wrapped so one unexpected exception can never crash the process.
+              // A crashing accessibility service is switched off by Android and has to be re-enabled by hand.
+              private fun safe(block: () -> Unit) {
+                  try { block() } catch (_: Throwable) {}
+              }
 
               private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-                  handler.post {
-                      applyStyle()
-                      evaluate()
-                  }
+                  handler.post { safe { applyStyle(); evaluate() } }
               }
 
               private val screenReceiver = object : BroadcastReceiver() {
                   override fun onReceive(context: Context?, intent: Intent?) {
-                      when (intent?.action) {
-                          Intent.ACTION_SCREEN_OFF -> hide()
-                          Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> evaluate()
-                          Intent.ACTION_CONFIGURATION_CHANGED -> handler.post { applyStyle() }
+                      safe {
+                          when (intent?.action) {
+                              Intent.ACTION_SCREEN_OFF -> { setOnHome(false); setShown(false) }
+                              Intent.ACTION_SCREEN_ON -> { resolvePackages(); onWake() }
+                              Intent.ACTION_USER_PRESENT -> onWake()
+                              Intent.ACTION_CONFIGURATION_CHANGED -> applyStyle()
+                          }
                       }
+                  }
+              }
+
+              private val evalRunnable = Runnable { safe { evaluate() } }
+
+              private val rootEvalRunnable = Runnable {
+                  safe {
+                      val a = activePackage()
+                      if (a != null) lastPkg = a
+                      evaluate()
+                  }
+              }
+
+              // While on the home screen: re-check Smart mode and re-sample the background colour once a second.
+              private val ticker = object : Runnable {
+                  override fun run() {
+                      if (!tickerOn) return
+                      safe {
+                          if (smartOn()) evaluate()
+                          requestColorSample(false)
+                      }
+                      if (tickerOn) handler.postDelayed(this, 1000)
                   }
               }
 
               override fun onServiceConnected() {
                   super.onServiceConnected()
-                  wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                  resolveHomePackages()
+                  safe {
+                      wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                      resolvePackages()
 
-                  clockView = TextClock(this).apply {
-                      includeFontPadding = false
-                      gravity = Gravity.CENTER_VERTICAL or Gravity.START
-                  }
-                  applyStyle()
+                      val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+                      darkText = !night
 
-                  Prefs.sp(this).registerOnSharedPreferenceChangeListener(prefListener)
-                  val filter = IntentFilter().apply {
-                      addAction(Intent.ACTION_SCREEN_OFF)
-                      addAction(Intent.ACTION_SCREEN_ON)
-                      addAction(Intent.ACTION_USER_PRESENT)
-                      addAction(Intent.ACTION_CONFIGURATION_CHANGED)
+                      clockView = TextClock(this).apply {
+                          includeFontPadding = false
+                          gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                          visibility = View.INVISIBLE
+                      }
+                      applyStyle()
+                      ensureAttached()
+
+                      Prefs.sp(this).registerOnSharedPreferenceChangeListener(prefListener)
+                      val filter = IntentFilter().apply {
+                          addAction(Intent.ACTION_SCREEN_OFF)
+                          addAction(Intent.ACTION_SCREEN_ON)
+                          addAction(Intent.ACTION_USER_PRESENT)
+                          addAction(Intent.ACTION_CONFIGURATION_CHANGED)
+                      }
+                      if (Build.VERSION.SDK_INT >= 33) {
+                          registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                      } else {
+                          registerReceiver(screenReceiver, filter)
+                      }
+                      onWake()
                   }
-                  if (Build.VERSION.SDK_INT >= 33) {
-                      registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-                  } else {
-                      registerReceiver(screenReceiver, filter)
-                  }
-                  evaluate()
               }
 
               override fun onAccessibilityEvent(event: AccessibilityEvent?) {
                   val e = event ?: return
-                  if (e.packageName?.toString() == packageName) return
-                  if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-                      val pkg = e.packageName?.toString() ?: return
-                      if (pkg == lastPkg) return
-                      lastPkg = pkg
-                  }
-                  if (e.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED && 
-                      !Prefs.sp(this).getBoolean(Prefs.SMART, false)) return
-                  
-                  handler.removeCallbacksAndMessages(null)
-                  handler.postDelayed({ evaluate() }, 50)
+                  safe { handleEvent(e) }
               }
 
               override fun onInterrupt() {}
 
               override fun onDestroy() {
-                  handler.removeCallbacksAndMessages(null)
-                  try { Prefs.sp(this).unregisterOnSharedPreferenceChangeListener(prefListener) } catch (_: Exception) {}
-                  try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
-                  hide()
+                  safe { handler.removeCallbacksAndMessages(null) }
+                  safe { Prefs.sp(this).unregisterOnSharedPreferenceChangeListener(prefListener) }
+                  safe { unregisterReceiver(screenReceiver) }
+                  safe { clockView?.let { wm?.removeViewImmediate(it) } }
+                  safe { worker.shutdown() }
+                  attached = false
+                  shown = false
+                  tickerOn = false
                   super.onDestroy()
               }
 
-              private fun resolveHomePackages() {
-                  val set = mutableSetOf<String>()
+              // ---------------------------------------------------------------- events
+
+              private fun handleEvent(e: AccessibilityEvent) {
+                  val pkg = e.packageName?.toString()
+                  when (e.eventType) {
+                      AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                          if (pkg == null || imePkgs.contains(pkg)) return
+                          if (isSystemUi(pkg)) {
+                              // Notification shade / control centre opened or closed: ask who is really on top.
+                              scheduleRootEval(100)
+                              return
+                          }
+                          // Fast path: decide straight from the event, no extra IPC and no delay.
+                          lastPkg = pkg
+                          evaluate()
+                      }
+                      AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                          if (smartOn()) scheduleEval(150)
+                      }
+                      AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                          if (pkg == packageName) return
+                          requestColorSample(false)
+                          if (smartOn()) scheduleEval(150)
+                      }
+                  }
+              }
+
+              private fun isSystemUi(pkg: String): Boolean = pkg == "android" || pkg.contains("systemui")
+
+              private fun scheduleEval(ms: Long) {
+                  handler.removeCallbacks(evalRunnable)
+                  handler.postDelayed(evalRunnable, ms)
+              }
+
+              private fun scheduleRootEval(ms: Long) {
+                  handler.removeCallbacks(rootEvalRunnable)
+                  handler.postDelayed(rootEvalRunnable, ms)
+              }
+
+              private fun smartOn(): Boolean = Prefs.sp(this).getBoolean(Prefs.SMART, false)
+
+              private fun onWake() {
+                  val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                  if (km.isKeyguardLocked) { setOnHome(false); setShown(false); return }
+                  val a = activePackage()
+                  if (a != null) lastPkg = a
+                  evaluate()
+              }
+
+              private fun activePackage(): String? =
+                  try { rootInActiveWindow?.packageName?.toString() } catch (_: Throwable) { null }
+
+              private fun resolvePackages() {
+                  val homes = mutableSetOf<String>()
                   try {
                       val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
                       val pkg = packageManager.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
-                      if (pkg != null && pkg != "android") set.add(pkg)
-                  } catch (_: Exception) {}
-                  homePkgs = set
+                      if (pkg != null && pkg != "android") homes.add(pkg)
+                      if (homes.isEmpty()) {
+                          for (ri in packageManager.queryIntentActivities(i, PackageManager.MATCH_DEFAULT_ONLY)) {
+                              val p = ri.activityInfo?.packageName ?: continue
+                              if (p != "android" && p != "com.android.settings") homes.add(p)
+                          }
+                      }
+                  } catch (_: Throwable) {}
+                  homePkgs = homes
+
+                  val imes = mutableSetOf<String>()
+                  try {
+                      val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                      for (m in imm.enabledInputMethodList) imes.add(m.packageName)
+                  } catch (_: Throwable) {}
+                  imePkgs = imes
               }
+
+              // ---------------------------------------------------------------- decision
 
               private fun evaluate() {
                   val p = Prefs.sp(this)
 
-                  if (p.getBoolean(Prefs.CAL, false)) { show(); return }
+                  if (p.getBoolean(Prefs.CAL, false)) { setOnHome(false); setShown(true); return }
 
                   val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  if (!pm.isInteractive) { hide(); return }
+                  if (!pm.isInteractive) { setOnHome(false); setShown(false); return }
 
-                  var pkg: String? = lastPkg
-                  try {
-                      val root = rootInActiveWindow
-                      if (root != null) {
-                          pkg = root.packageName?.toString()
-                          root.recycle()
-                      }
-                  } catch (_: Exception) {}
+                  var pkg = lastPkg
+                  if (pkg == null) { pkg = activePackage(); lastPkg = pkg }
 
                   val onHome = pkg != null && homePkgs.contains(pkg)
-                  if (!onHome) { hide(); return }
+                  setOnHome(onHome)
+                  if (!onHome) { setShown(false); return }
 
-                  if (p.getBoolean(Prefs.SMART, false) && realClockVisible()) { hide(); return }
-                  show()
+                  if (p.getBoolean(Prefs.SMART, false)) {
+                      if (realClockVisible()) { smartMiss = 0; setShown(false); return }
+                      // Real clock not seen. Require two misses in a row before drawing ours,
+                      // so a single failed read can no longer make the clock flicker or double up.
+                      smartMiss++
+                      if (!shown && smartMiss < 2) { scheduleEval(250); return }
+                  }
+                  setShown(true)
               }
 
+              private fun setOnHome(on: Boolean) {
+                  if (on == tickerOn) return
+                  tickerOn = on
+                  handler.removeCallbacks(ticker)
+                  if (on) handler.postDelayed(ticker, 1000)
+              }
+
+              // ---------------------------------------------------------------- real clock detection (Smart mode)
+
               private fun realClockVisible(): Boolean {
+                  val sbH = statusBarHeightPx()
                   try {
                       for (w in windows) {
+                          if (w.type != AccessibilityWindowInfo.TYPE_SYSTEM) continue
                           val root = w.root ?: continue
-                          val nodes = root.findAccessibilityNodeInfosByViewId("com.android.systemui:id/clock")
-                          var visible = false
-                          if (nodes != null) {
-                              for (n in nodes) {
-                                  if (n.isVisibleToUser) visible = true
-                                  n.recycle()
+                          if (root.packageName?.toString() == packageName) continue
+                          for (id in clockIds) {
+                              val nodes = root.findAccessibilityNodeInfosByViewId(id)
+                              if (nodes != null) {
+                                  for (n in nodes) {
+                                      if (n.isVisibleToUser && inStatusBar(n, sbH)) return true
+                                  }
                               }
                           }
-                          root.recycle()
-                          if (visible) return true
+                          // Fallback for ROMs that use another view id: any visible time-like text inside the status bar.
+                          if (scanForTime(root, sbH, 0)) return true
                       }
-                  } catch (_: Exception) {}
+                  } catch (_: Throwable) {}
                   return false
               }
 
-              private fun show() {
-                  if (isCurrentlyShowing) return
-                  val v = clockView ?: return
-                  try {
-                      wm?.addView(v, params())
-                      isCurrentlyShowing = true
-                  } catch (_: Exception) {}
+              private fun inStatusBar(n: AccessibilityNodeInfo, sbH: Int): Boolean {
+                  val r = Rect()
+                  n.getBoundsInScreen(r)
+                  return r.width() > 0 && r.height() > 0 && r.top < sbH
               }
 
-              private fun hide() {
-                  if (!isCurrentlyShowing) return
-                  val v = clockView ?: return
-                  try { wm?.removeViewImmediate(v) } catch (_: Exception) {}
-                  isCurrentlyShowing = false
+              private fun scanForTime(n: AccessibilityNodeInfo?, sbH: Int, depth: Int): Boolean {
+                  if (n == null || depth > 14) return false
+                  if (n.isVisibleToUser) {
+                      val t = n.text?.toString()?.trim()
+                      if (t != null && t.length <= 8 && timeRegex.matches(t) && inStatusBar(n, sbH)) return true
+                  }
+                  for (i in 0 until n.childCount) {
+                      if (scanForTime(n.getChild(i), sbH, depth + 1)) return true
+                  }
+                  return false
               }
+
+              // ---------------------------------------------------------------- show / hide
+
+              private fun ensureAttached(): Boolean {
+                  if (attached) return true
+                  val v = clockView ?: return false
+                  return try {
+                      v.visibility = View.INVISIBLE
+                      wm?.addView(v, params())
+                      attached = true
+                      true
+                  } catch (_: Throwable) {
+                      false
+                  }
+              }
+
+              // The overlay window stays attached; we only flip its visibility. That is instant,
+              // unlike adding/removing a window on every app switch.
+              private fun setShown(on: Boolean) {
+                  val v = clockView ?: return
+                  if (on) {
+                      if (!ensureAttached()) return
+                      if (!shown || v.visibility != View.VISIBLE) {
+                          shown = true
+                          v.visibility = View.VISIBLE
+                          requestColorSample(true)
+                      }
+                  } else if (shown) {
+                      shown = false
+                      v.visibility = View.INVISIBLE
+                  }
+              }
+
+              // ---------------------------------------------------------------- automatic colour
+
+              private fun applyColor() {
+                  val v = clockView ?: return
+                  val cal = Prefs.sp(this).getBoolean(Prefs.CAL, false)
+                  v.setTextColor(
+                      if (cal) 0xFFFF3B30.toInt()
+                      else if (darkText) Color.BLACK
+                      else Color.WHITE
+                  )
+              }
+
+              private fun applyLuma(luma: Float) {
+                  // Hysteresis so the colour does not flip back and forth on mid-tone wallpapers.
+                  val newDark = if (luma > 0.6f) true else if (luma < 0.45f) false else darkText
+                  if (newDark != darkText) {
+                      darkText = newDark
+                      applyColor()
+                  }
+              }
+
+              private fun requestColorSample(force: Boolean) {
+                  if (Build.VERSION.SDK_INT < 30) return
+                  if (!shown) return
+                  if (Prefs.sp(this).getBoolean(Prefs.CAL, false)) return
+                  val now = SystemClock.elapsedRealtime()
+                  if (shotInFlight && now - lastShotAt > 5000) shotInFlight = false
+                  if (shotInFlight || now - lastShotAt < (if (force) 1100L else 2000L)) return
+                  lastShotAt = now
+                  shotInFlight = true
+                  try {
+                      takeScreenshot(Display.DEFAULT_DISPLAY, worker, object : AccessibilityService.TakeScreenshotCallback {
+                          override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                              var luma = -1f
+                              try { luma = sampleLuma(screenshot) } catch (_: Throwable) {}
+                              handler.post {
+                                  shotInFlight = false
+                                  if (luma >= 0f) safe { applyLuma(luma) }
+                              }
+                          }
+
+                          override fun onFailure(errorCode: Int) {
+                              handler.post { shotInFlight = false }
+                          }
+                      })
+                  } catch (_: Throwable) {
+                      shotInFlight = false
+                  }
+              }
+
+              // Median brightness of the strip behind the status bar, next to (not under) our own clock.
+              // Pixels that are almost pure black are ignored so the camera cut-out does not skew the result.
+              private fun sampleLuma(result: AccessibilityService.ScreenshotResult): Float {
+                  val hb = result.hardwareBuffer
+                  try {
+                      val hw = Bitmap.wrapHardwareBuffer(hb, result.colorSpace) ?: return -1f
+                      val bmp = hw.copy(Bitmap.Config.ARGB_8888, false)
+                      hw.recycle()
+                      if (bmp == null) return -1f
+
+                      val d = resources.displayMetrics.density
+                      val bandH = minOf(statusBarHeightPx(), bmp.height)
+                      val left = Prefs.sp(this).getFloat(Prefs.X, Prefs.DEF_X) * d
+                      val clockL = (left - 4 * d).toInt()
+                      val clockR = (left + clockWidth + 4 * d).toInt()
+                      val maxX = (bmp.width * 0.45f).toInt()
+                      val step = maxOf(1, maxX / 30)
+                      val rows = intArrayOf(bandH / 4, bandH / 2, (bandH * 3) / 4)
+
+                      val vals = ArrayList<Float>()
+                      var x = 0
+                      while (x < maxX) {
+                          if (x < clockL || x > clockR) {
+                              for (y in rows) {
+                                  val c = bmp.getPixel(x, y)
+                                  val l = (0.299f * Color.red(c) + 0.587f * Color.green(c) + 0.114f * Color.blue(c)) / 255f
+                                  if (l > 0.02f) vals.add(l)
+                              }
+                          }
+                          x += step
+                      }
+                      bmp.recycle()
+                      if (vals.isEmpty()) return 0f
+                      vals.sort()
+                      return vals[vals.size / 2]
+                  } finally {
+                      try { hb.close() } catch (_: Throwable) {}
+                  }
+              }
+
+              // ---------------------------------------------------------------- style / layout
 
               private fun applyStyle() {
                   val v = clockView ?: return
                   val p = Prefs.sp(this)
 
-                  // Use single 'h' for 12-hour and 'H' for 24-hour to drop the leading zero.
-                  v.format12Hour = if (p.getBoolean(Prefs.AMPM, false)) "h:mm a" else "h:mm"
+                  // 12-hour 'h' and 24-hour 'H' both drop the leading zero. No AM/PM.
+                  v.format12Hour = "h:mm"
                   v.format24Hour = "H:mm"
                   v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, p.getFloat(Prefs.SIZE, Prefs.DEF_SIZE))
-                  
-                  // Force tabular numbers and left alignment to lock positions.
+
+                  // Tabular numbers and left alignment lock the digit positions.
                   v.fontFeatureSettings = "tnum"
                   v.textAlignment = View.TEXT_ALIGNMENT_VIEW_START
 
@@ -402,28 +751,14 @@ jobs:
                       v.setFontVariationSettings(null)
                   }
 
-                  // Measure the maximum possible width to lock the view size.
-                  val paint = v.paint
-                  val maxText = if (p.getBoolean(Prefs.AMPM, false)) "12:88 AM" else "23:88"
-                  val textWidth = paint.measureText(maxText).toInt()
-                  val padding = (6 * resources.displayMetrics.density).toInt()
-                  clockWidth = textWidth + padding
+                  // Lock the view width to the widest possible time so the position never shifts.
+                  val textWidth = v.paint.measureText("23:88").toInt()
+                  clockWidth = textWidth + (6 * resources.displayMetrics.density).toInt()
 
-                  val calibrating = p.getBoolean(Prefs.CAL, false)
-                  val autoColor = p.getBoolean(Prefs.AUTO_COLOR, true)
-                  val nightMode = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+                  applyColor()
 
-                  val color = when {
-                      calibrating -> 0xFFFF3B30.toInt()
-                      autoColor && nightMode -> Color.WHITE
-                      autoColor && !nightMode -> Color.BLACK
-                      p.getBoolean(Prefs.WHITE, true) -> Color.WHITE
-                      else -> Color.BLACK
-                  }
-                  v.setTextColor(color)
-
-                  if (isCurrentlyShowing) {
-                      try { wm?.updateViewLayout(v, params()) } catch (_: Exception) {}
+                  if (attached) {
+                      try { wm?.updateViewLayout(v, params()) } catch (_: Throwable) {}
                   }
               }
 
@@ -500,9 +835,9 @@ jobs:
           import android.app.AlertDialog
           import android.content.Intent
           import android.content.SharedPreferences
+          import android.net.Uri
           import android.os.Bundle
           import android.provider.Settings
-          import android.view.Gravity
           import android.view.ViewGroup
           import android.widget.Button
           import android.widget.CheckBox
@@ -552,13 +887,17 @@ jobs:
                   root.addView(TextView(this).apply {
                       setPadding(0, px(16), 0, px(4))
                       text = "2. Line up the RED clock exactly on the real clock in this screen's status bar " +
-                          "(top-left). Red text over white text should look like one clock."
+                          "(top-left). The red clock should sit right on top of the real one."
+                  })
+                  root.addView(TextView(this).apply {
+                      textSize = 12f
+                      text = "Buttons: the outer two move in big steps, the inner two in small steps."
                   })
 
-                  stepper(root, "X (dp from left)", Prefs.X, Prefs.DEF_X, 1.0f, 0.1f, "%.2f")
-                  stepper(root, "Y (dp from top)", Prefs.Y, Prefs.DEF_Y, 1.0f, 0.1f, "%.2f")
-                  stepper(root, "Size (dp)", Prefs.SIZE, Prefs.DEF_SIZE, 0.5f, 0.05f, "%.2f")
-                  stepper(root, "Weight (0 = default)", Prefs.WGHT, 0f, 50f, 10f, "%.0f")
+                  stepper(root, "X position (dp from left)", Prefs.X, Prefs.DEF_X, 1.0f, 0.1f)
+                  stepper(root, "Y position (dp from top)", Prefs.Y, Prefs.DEF_Y, 1.0f, 0.1f)
+                  stepper(root, "Size (dp)", Prefs.SIZE, Prefs.DEF_SIZE, 0.5f, 0.05f)
+                  stepper(root, "Weight (0 = default)", Prefs.WGHT, 0f, 50f, 10f)
 
                   root.addView(TextView(this).apply {
                       setPadding(0, px(16), 0, 0)
@@ -601,17 +940,41 @@ jobs:
                       }
                   })
 
-                  root.addView(check("Show AM/PM (12-hour phones only)", Prefs.AMPM, false))
-                  root.addView(check("Auto Day/Night color (Black Day / White Night)", Prefs.AUTO_COLOR, true))
-                  root.addView(check("Force White text", Prefs.WHITE, true))
+                  root.addView(TextView(this).apply {
+                      setPadding(0, px(12), 0, 0)
+                      textSize = 12f
+                      text = "The clock colour follows the background automatically (white on dark, black on light), like the other status bar icons."
+                  })
+
                   root.addView(check("Smart mode: hide while the real clock is visible", Prefs.SMART, false))
-                  
+
                   val darkModeCheck = check("Dark Mode (App Interface)", Prefs.UI_DARK, false)
                   darkModeCheck.setOnCheckedChangeListener { _, on ->
                       sp.edit().putBoolean(Prefs.UI_DARK, on).apply()
                       recreate()
                   }
                   root.addView(darkModeCheck)
+
+                  if (Healer.canHeal(this)) {
+                      root.addView(check("Auto re-enable the accessibility service if the system turns it off", Prefs.HEAL, true))
+                  } else {
+                      root.addView(TextView(this).apply {
+                          setPadding(0, px(12), 0, 0)
+                          textSize = 12f
+                          text = "Optional auto-recovery: once, from a computer, run\n" +
+                              "adb shell pm grant com.kyrox.statusclock android.permission.WRITE_SECURE_SETTINGS\n" +
+                              "Then reopen this app."
+                      })
+                  }
+
+                  root.addView(Button(this).apply {
+                      text = "App info (battery & autostart)"
+                      setOnClickListener {
+                          try {
+                              startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                          } catch (_: Exception) {}
+                      }
+                  })
 
                   root.addView(Button(this).apply {
                       text = "Reset to defaults"
@@ -622,7 +985,6 @@ jobs:
                               .putFloat(Prefs.SIZE, Prefs.DEF_SIZE)
                               .putString(Prefs.FONT, Prefs.DEF_FONT)
                               .putFloat(Prefs.WGHT, 0f)
-                              .putBoolean(Prefs.AUTO_COLOR, true)
                               .apply()
                           recreate()
                       }
@@ -640,60 +1002,50 @@ jobs:
                   })
               }
 
-              private fun stepper(root: LinearLayout, title: String, key: String, def: Float, coarseStep: Float, fineStep: Float, fmt: String) {
+              private fun fmt(v: Float): String {
+                  val r = Math.round(v)
+                  return if (Math.abs(v - r) < 0.0001f) r.toString()
+                  else String.format(Locale.US, "%.2f", v).trimEnd('0').trimEnd('.')
+              }
+
+              // One title line (with the current value) and, under it, one row of four equal-width buttons.
+              // Equal weights keep every button on screen and give the title the full width.
+              private fun stepper(root: LinearLayout, title: String, key: String, def: Float, coarse: Float, fine: Float) {
                   val dp = resources.displayMetrics.density
                   fun px(v: Int) = (v * dp).toInt()
 
                   val label = TextView(this).apply {
                       textSize = 14f
-                      gravity = Gravity.CENTER_VERTICAL
-                      layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                      setPadding(0, px(14), 0, px(2))
                   }
                   fun refresh() {
-                      label.text = "$title\n" + String.format(Locale.US, fmt, sp.getFloat(key, def))
+                      label.text = title + ": " + fmt(sp.getFloat(key, def))
                   }
                   fun change(delta: Float) {
                       sp.edit().putFloat(key, sp.getFloat(key, def) + delta).apply()
                       refresh()
                   }
 
-                  fun makeBtn(text: String, delta: Float): Button {
-                      return Button(this).apply {
-                          this.text = text
-                          textSize = 11f
-                          minHeight = 0
+                  val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                  val steps = listOf(-coarse, -fine, fine, coarse)
+                  for (d in steps) {
+                      val b = Button(this).apply {
+                          text = (if (d > 0f) "+" else "-") + fmt(Math.abs(d))
+                          textSize = 13f
+                          setAllCaps(false)
                           minWidth = 0
-                          setPadding(px(6), px(4), px(6), px(4))
-                          layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                              marginStart = px(2)
-                              marginEnd = px(2)
-                          }
-                          setOnClickListener { change(delta) }
+                          minimumWidth = 0
+                          minHeight = 0
+                          minimumHeight = 0
+                          setPadding(px(2), px(10), px(2), px(10))
+                          setOnClickListener { change(d) }
                       }
-                  }
-
-                  val row = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                      setPadding(0, px(8), 0, px(8))
-                      addView(label)
-                      
-                      addView(makeBtn("-${String.format(Locale.US, fmt, coarseStep)}", -coarseStep))
-                      
-                      val fineLabel = TextView(this@MainActivity).apply {
-                          text = "Fine:"
-                          textSize = 10f
-                          gravity = Gravity.CENTER_VERTICAL
-                          setPadding(px(4), 0, px(4), 0)
-                      }
-                      addView(fineLabel)
-                      
-                      addView(makeBtn("-${String.format(Locale.US, fmt, fineStep)}", -fineStep))
-                      addView(makeBtn("+${String.format(Locale.US, fmt, fineStep)}", fineStep))
-                      
-                      addView(makeBtn("+${String.format(Locale.US, fmt, coarseStep)}", coarseStep))
+                      val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                      lp.setMargins(px(2), 0, px(2), 0)
+                      row.addView(b, lp)
                   }
                   refresh()
+                  root.addView(label)
                   root.addView(row)
               }
 
@@ -748,6 +1100,10 @@ jobs:
               override fun onResume() {
                   super.onResume()
                   sp.edit().putBoolean(Prefs.CAL, true).apply()
+                  if (Healer.canHeal(this)) {
+                      Healer.ensure(this)
+                      Healer.schedule(this)
+                  }
                   statusText.text = if (serviceEnabled()) "Status: ON (service running)" else "Status: OFF. Turn it on below."
               }
 
