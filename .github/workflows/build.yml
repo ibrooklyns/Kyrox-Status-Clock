@@ -230,6 +230,7 @@ jobs:
               const val KEEP = "keep_alive"   // run as a foreground service so the system doesn't kill it
               const val THEME = "app_theme"   // 0 auto, 1 light, 2 dark, 3 AMOLED
               const val ASKED_NOTIF = "asked_notif"
+              const val DISGUISE = "disguise_text" // add an invisible character so our text never equals the real clock's
 
               const val MODE_WHITE = 0
               const val MODE_BLACK = 1
@@ -617,28 +618,59 @@ jobs:
                   val onHome = pkg != null && homePkgs.contains(pkg)
                   if (!onHome) { setShown(false); return }
 
-                  if (smart && realClockVisible()) { setShown(false); return }
+                  if (smart) {
+                      // The real clock can appear/disappear without any accessibility event (and during the
+                      // home transition it settles a moment after the window change). So while on the home
+                      // screen in smart mode, keep re-checking instead of relying on events.
+                      val real = realClockVisible()
+                      schedule(600)
+                      if (real) { setShown(false); return }
+                  }
                   setShown(true)
               }
 
+              private var lastDebug = ""
+
               /** Smart mode: is the system's own status bar clock currently visible? */
               private fun realClockVisible(): Boolean {
+                  val sb = StringBuilder()
+                  var result = false
                   try {
                       for (w in windows) {
-                          val root = w.root ?: continue
+                          val root = w.root
+                          if (root == null) {
+                              sb.append("window type=").append(w.type).append(" root=null\n")
+                              continue
+                          }
+                          val pkg = root.packageName?.toString()
+                          if (pkg == packageName) { root.recycle(); continue }   // never look at our own overlay
                           val nodes = root.findAccessibilityNodeInfosByViewId("com.android.systemui:id/clock")
                           var visible = false
+                          var count = 0
                           if (nodes != null) {
                               for (n in nodes) {
+                                  count++
                                   if (n.isVisibleToUser) visible = true
                                   n.recycle()
                               }
                           }
+                          sb.append("window type=").append(w.type).append(" pkg=").append(pkg)
+                              .append(" clockNodes=").append(count).append(" visible=").append(visible).append('\n')
                           root.recycle()
-                          if (visible) return true
+                          if (visible) result = true
                       }
-                  } catch (_: Exception) {}
-                  return false
+                  } catch (e: Exception) {
+                      sb.append("error: ").append(e.javaClass.simpleName).append('\n')
+                  }
+                  sb.append("=> real clock visible: ").append(result)
+                  val s = sb.toString()
+                  if (s != lastDebug) {
+                      lastDebug = s
+                      try {
+                          getSharedPreferences("clockdebug", Context.MODE_PRIVATE).edit().putString("smart", s).apply()
+                      } catch (_: Exception) {}
+                  }
+                  return result
               }
 
               // ------------------------------------------------------------- window
@@ -685,9 +717,12 @@ jobs:
                   val v = clockView ?: return
                   val p = Prefs.sp(this)
 
-                  v.format12Hour = if (p.getBoolean(Prefs.AMPM, false)) "h:mm a" else "h:mm"
+                  // An invisible zero-width space on the end: looks identical, but the text is never
+                  // exactly the same string as the system status bar clock (MIUI may react to a duplicate).
+                  val tail = if (p.getBoolean(Prefs.DISGUISE, true)) "'\u200B'" else ""
+                  v.format12Hour = (if (p.getBoolean(Prefs.AMPM, false)) "h:mm a" else "h:mm") + tail
                   // No leading zero on the hour (9:05, not 09:05) in both 12h and 24h mode.
-                  v.format24Hour = "H:mm"
+                  v.format24Hour = "H:mm" + tail
                   v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, p.getFloat(Prefs.SIZE, Prefs.DEF_SIZE))
 
                   val fontName = p.getString(Prefs.FONT, Prefs.DEF_FONT) ?: Prefs.DEF_FONT
@@ -1018,7 +1053,21 @@ jobs:
                   // ------------------------------------------------------------ other options
                   root.addView(heading("Options"))
                   root.addView(check("Show AM/PM (12-hour phones only)", Prefs.AMPM, false))
+                  root.addView(check("Disguise clock text (invisible extra character; try this if smart mode hides the clock)", Prefs.DISGUISE, true))
                   root.addView(check("Smart mode (experimental): hide while the real clock is visible", Prefs.SMART, false))
+                  root.addView(Button(this).apply {
+                      text = "Smart mode: show what the service sees"
+                      setOnClickListener {
+                          val d = getSharedPreferences("clockdebug", MODE_PRIVATE).getString("smart", null)
+                          AlertDialog.Builder(this@MainActivity)
+                              .setTitle("Smart mode diagnostics")
+                              .setMessage(
+                                  d ?: "No data yet. Turn on Smart mode, go to the home screen for a few seconds, then come back here."
+                              )
+                              .setPositiveButton("OK", null)
+                              .show()
+                      }
+                  })
 
                   // ------------------------------------------------------------- appearance
                   root.addView(heading("App appearance"))
