@@ -506,6 +506,7 @@ jobs:
                   // Note: TYPE_WINDOWS_CHANGED events usually have no package name, so it can be null here.
                   val pkg = e.packageName?.toString()
                   if (pkg == packageName) return
+                  lastEventAt = SystemClock.uptimeMillis()
 
                   when (e.eventType) {
                       // Smart mode: the status bar / its clock appearing or disappearing shows up here.
@@ -623,13 +624,17 @@ jobs:
                       // home transition it settles a moment after the window change). So while on the home
                       // screen in smart mode, keep re-checking instead of relying on events.
                       val real = realClockVisible()
-                      schedule(600)
+                      // Right after arriving on the home screen the system clock fades out within ~1s, so
+                      // poll fast during that window (our clock then appears within ~100ms of it going
+                      // away), and slowly afterwards to save battery.
+                      schedule(if (SystemClock.uptimeMillis() - lastEventAt < 4000) 100 else 400)
                       if (real) { setShown(false); return }
                   }
                   setShown(true)
               }
 
               private var lastDebug = ""
+              private var lastEventAt = 0L
 
               /** Smart mode: is the system's own status bar clock currently visible? */
               private fun realClockVisible(): Boolean {
@@ -657,7 +662,7 @@ jobs:
                           sb.append("window type=").append(w.type).append(" pkg=").append(pkg)
                               .append(" clockNodes=").append(count).append(" visible=").append(visible).append('\n')
                           root.recycle()
-                          if (visible) result = true
+                          if (visible) { result = true; break }   // found it: stop scanning (faster)
                       }
                   } catch (e: Exception) {
                       sb.append("error: ").append(e.javaClass.simpleName).append('\n')
