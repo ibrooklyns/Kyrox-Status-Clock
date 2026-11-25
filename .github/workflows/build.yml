@@ -214,6 +214,11 @@ jobs:
 
               fun sp(c: Context): SharedPreferences = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
           }
+
+          // Last Smart-mode detection result, shown in the app to help debugging.
+          object Diag {
+              @Volatile var smart: String = "not checked yet"
+          }
           KX_EOF
           mkdir -p app/src/main/java/com/kyrox/statusclock
           mkdir -p app/src/main/java/com/kyrox/statusclock
@@ -323,7 +328,6 @@ jobs:
           import android.view.View
           import android.view.WindowManager
           import android.view.accessibility.AccessibilityEvent
-          import android.view.accessibility.AccessibilityNodeInfo
           import android.view.accessibility.AccessibilityWindowInfo
           import android.view.inputmethod.InputMethodManager
           import android.widget.TextClock
@@ -349,7 +353,6 @@ jobs:
               private var lastShotAt = 0L
 
               private val clockIds = listOf("com.android.systemui:id/clock", "com.android.systemui:id/clock_text")
-              private val timeRegex = Regex("\\d{1,2}[:.]\\d{2}(\\s?[AaPp][Mm])?")
 
               // Every callback is wrapped so one unexpected exception can never crash the process.
               // A crashing accessibility service is switched off by Android and has to be re-enabled by hand.
@@ -559,8 +562,13 @@ jobs:
 
               // ---------------------------------------------------------------- real clock detection (Smart mode)
 
-              private fun realClockVisible(): Boolean {
+              // Returns a short description of the real status bar clock if one is visible
+              // at the spot where our clock sits, otherwise null.
+              private fun findRealClock(): String? {
                   val sbH = statusBarHeightPx()
+                  val d = resources.displayMetrics.density
+                  val ourL = Prefs.sp(this).getFloat(Prefs.X, Prefs.DEF_X) * d
+                  val ourR = ourL + clockWidth
                   try {
                       for (w in windows) {
                           if (w.type != AccessibilityWindowInfo.TYPE_SYSTEM) continue
@@ -570,33 +578,26 @@ jobs:
                               val nodes = root.findAccessibilityNodeInfosByViewId(id)
                               if (nodes != null) {
                                   for (n in nodes) {
-                                      if (n.isVisibleToUser && inStatusBar(n, sbH)) return true
+                                      if (!n.isVisibleToUser) continue
+                                      val r = Rect()
+                                      n.getBoundsInScreen(r)
+                                      // Must be a real, non-empty clock in the status bar, overlapping where ours is drawn.
+                                      if (r.width() <= 0 || r.height() <= 0 || r.top >= sbH) continue
+                                      if (r.right < ourL - 40 * d || r.left > ourR + 40 * d) continue
+                                      if (n.text.isNullOrBlank()) continue
+                                      return id.substringAfter("/") + " " + r.toShortString()
                                   }
                               }
                           }
-                          // Fallback for ROMs that use another view id: any visible time-like text inside the status bar.
-                          if (scanForTime(root, sbH, 0)) return true
                       }
                   } catch (_: Throwable) {}
-                  return false
+                  return null
               }
 
-              private fun inStatusBar(n: AccessibilityNodeInfo, sbH: Int): Boolean {
-                  val r = Rect()
-                  n.getBoundsInScreen(r)
-                  return r.width() > 0 && r.height() > 0 && r.top < sbH
-              }
-
-              private fun scanForTime(n: AccessibilityNodeInfo?, sbH: Int, depth: Int): Boolean {
-                  if (n == null || depth > 14) return false
-                  if (n.isVisibleToUser) {
-                      val t = n.text?.toString()?.trim()
-                      if (t != null && t.length <= 8 && timeRegex.matches(t) && inStatusBar(n, sbH)) return true
-                  }
-                  for (i in 0 until n.childCount) {
-                      if (scanForTime(n.getChild(i), sbH, depth + 1)) return true
-                  }
-                  return false
+              private fun realClockVisible(): Boolean {
+                  val hit = findRealClock()
+                  Diag.smart = hit ?: "no real clock found"
+                  return hit != null
               }
 
               // ---------------------------------------------------------------- show / hide
@@ -1104,7 +1105,8 @@ jobs:
                       Healer.ensure(this)
                       Healer.schedule(this)
                   }
-                  statusText.text = if (serviceEnabled()) "Status: ON (service running)" else "Status: OFF. Turn it on below."
+                  statusText.text = (if (serviceEnabled()) "Status: ON (service running)" else "Status: OFF. Turn it on below.") +
+                      (if (sp.getBoolean(Prefs.SMART, false)) "\nSmart mode: " + Diag.smart else "")
               }
 
               override fun onPause() {
