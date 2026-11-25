@@ -55,8 +55,8 @@ jobs:
                   applicationId = "com.kyrox.statusclock"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 7
-                  versionName = "1.6"
+                  versionCode = 2
+                  versionName = "2.0"
               }
               buildTypes {
                   release { isMinifyEnabled = false }
@@ -73,8 +73,10 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-              <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
               <queries>
                   <intent>
@@ -85,9 +87,9 @@ jobs:
 
               <application
                   android:allowBackup="false"
-                  android:label="@string/app_name"
                   android:icon="@mipmap/ic_launcher"
-                  android:roundIcon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:label="@string/app_name"
                   android:theme="@style/AppTheme">
 
                   <activity
@@ -102,6 +104,7 @@ jobs:
                   <service
                       android:name=".ClockOverlayService"
                       android:exported="true"
+                      android:foregroundServiceType="specialUse"
                       android:label="@string/app_name"
                       android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
                       <intent-filter>
@@ -110,21 +113,10 @@ jobs:
                       <meta-data
                           android:name="android.accessibilityservice"
                           android:resource="@xml/accessibility_config" />
+                      <property
+                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="Keeps the status bar clock accessibility service from being killed" />
                   </service>
-
-                  <receiver
-                      android:name=".BootReceiver"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.BOOT_COMPLETED" />
-                          <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                      </intent-filter>
-                  </receiver>
-
-                  <service
-                      android:name=".HealJob"
-                      android:exported="false"
-                      android:permission="android.permission.BIND_JOB_SERVICE" />
               </application>
           </manifest>
           KX_EOF
@@ -132,7 +124,7 @@ jobs:
           cat > app/src/main/res/xml/accessibility_config.xml <<'KX_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged|typeViewScrolled"
+              android:accessibilityEventTypes="typeWindowStateChanged"
               android:accessibilityFeedbackType="feedbackGeneric"
               android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
               android:canRetrieveWindowContent="true"
@@ -144,48 +136,76 @@ jobs:
           cat > app/src/main/res/values/strings.xml <<'KX_EOF'
           <resources>
               <string name="app_name">Kyrox Status Clock</string>
-              <string name="service_description">Draws a clock at the status bar clock position, only while the home screen is showing. It briefly looks at the colour of the strip behind the status bar to pick black or white text. Nothing is stored or sent anywhere.</string>
-          </resources>
-          KX_EOF
-          cat > app/src/main/res/values/themes.xml <<'KX_EOF'
-          <resources>
-              <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar" />
+              <string name="service_description">Draws a clock at the status bar clock position, only while the home screen is showing. With the \"Match background\" colour option it looks at the brightness of a small strip of the status bar area to pick white or black. It does not store or send anything.</string>
+              <string name="keep_channel">Keep running</string>
+              <string name="keep_title">Kyrox Status Clock</string>
+              <string name="keep_text">Running</string>
           </resources>
           KX_EOF
           mkdir -p app/src/main/res/values
           cat > app/src/main/res/values/colors.xml <<'KX_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <color name="icon_bg">#2DD4BF</color>
+              <color name="ic_launcher_background">#1ACF94</color>
+          </resources>
+          KX_EOF
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/themes.xml <<'KX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <!-- Launch theme: light by default, dark when the system is in dark mode (see values-night) -->
+              <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar" />
+
+              <!-- Themes the settings screen picks from -->
+              <style name="ThemeLight" parent="android:Theme.Material.Light.NoActionBar" />
+
+              <style name="ThemeDark" parent="android:Theme.Material.NoActionBar" />
+
+              <style name="ThemeAmoled" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:colorBackground">#000000</item>
+                  <item name="android:windowBackground">#000000</item>
+                  <item name="android:statusBarColor">#000000</item>
+                  <item name="android:navigationBarColor">#000000</item>
+                  <item name="android:colorButtonNormal">#1F1F1F</item>
+              </style>
+          </resources>
+          KX_EOF
+          mkdir -p app/src/main/res/values-night
+          cat > app/src/main/res/values-night/themes.xml <<'KX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:Theme.Material.NoActionBar" />
           </resources>
           KX_EOF
           mkdir -p app/src/main/res/drawable
-          cat > app/src/main/res/drawable/ic_launcher_foreground.xml <<'KX_EOF'
+          cat > app/src/main/res/drawable/ic_stat_clock.xml <<'KX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="108dp"
-              android:height="108dp"
-              android:viewportWidth="108"
-              android:viewportHeight="108">
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
               <path
-                  android:fillColor="#FFFFFF"
-                  android:pathData="M24,34 h60 a8,8 0 0,1 8,8 v24 a8,8 0 0,1 -8,8 h-60 a8,8 0 0,1 -8,-8 v-24 a8,8 0 0,1 8,-8 z" />
-              <path
-                  android:fillColor="#2DD4BF"
-                  android:pathData="M28,42 h52 v24 h-52 z" />
-              <path
-                  android:fillColor="#FFFFFF"
-                  android:pathData="M32,48 h8 v4 h-8 z M32,56 h8 v4 h-8 z M44,48 h12 v2 h-12 z M44,56 h4 v4 h-4 z M52,56 h4 v4 h-4 z" />
-              <path
-                  android:fillColor="#FFFFFF"
-                  android:pathData="M64,48 h12 a3,3 0 0,1 3,3 v10 a3,3 0 0,1 -3,3 h-12 a3,3 0 0,1 -3,-3 v-10 a3,3 0 0,1 3,-3 z M64,52 h12 v10 h-12 z" />
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM12,20c-4.41,0 -8,-3.59 -8,-8s3.59,-8 8,-8 8,3.59 8,8 -3.59,8 -8,8zM12.5,7H11v6l5.25,3.15 0.75,-1.23 -4.5,-2.67z" />
           </vector>
           KX_EOF
           mkdir -p app/src/main/res/mipmap-anydpi-v26
           cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'KX_EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@color/icon_bg" />
+              <background android:drawable="@color/ic_launcher_background" />
               <foreground android:drawable="@drawable/ic_launcher_foreground" />
+              <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+          </adaptive-icon>
+          KX_EOF
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml <<'KX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background" />
+              <foreground android:drawable="@drawable/ic_launcher_foreground" />
+              <monochrome android:drawable="@drawable/ic_launcher_foreground" />
           </adaptive-icon>
           KX_EOF
           mkdir -p app/src/main/java/com/kyrox/statusclock
@@ -197,126 +217,142 @@ jobs:
 
           object Prefs {
               const val FILE = "clockoverlay"
-              const val X = "x_dp"
-              const val Y = "y_dp"
-              const val SIZE = "size_dp"
-              const val SMART = "smart_mode"
-              const val FONT = "font_family"
-              const val WGHT = "font_weight"
-              const val CAL = "calibrating"
-              const val UI_DARK = "ui_dark"
-              const val HEAL = "auto_heal"
+              const val X = "x_dp"            // distance from the left screen edge
+              const val Y = "y_dp"            // vertical nudge (0 = top of the screen)
+              const val SIZE = "size_dp"      // text size
+              const val AMPM = "show_ampm"    // 12-hour mode only
+              const val WHITE = "white_text"  // legacy (v1): replaced by COLOR
+              const val COLOR = "color_mode"  // see MODE_* below
+              const val SMART = "smart_mode"  // hide overlay while the real clock is visible
+              const val FONT = "font_family"  // FONT_SYSTEM, a family name, OR absolute path to a font file
+              const val WGHT = "font_weight"  // weight (100-900), 0 = font default
+              const val CAL = "calibrating"   // true while the settings screen is open
+              const val KEEP = "keep_alive"   // run as a foreground service so the system doesn't kill it
+              const val THEME = "app_theme"   // 0 auto, 1 light, 2 dark, 3 AMOLED
+              const val ASKED_NOTIF = "asked_notif"
+
+              const val MODE_WHITE = 0
+              const val MODE_BLACK = 1
+              const val MODE_DAYNIGHT = 2     // white in system dark mode, black in light mode
+              const val MODE_BACKGROUND = 3   // white/black depending on what is behind the clock
+
+              const val FONT_SYSTEM = "system" // follow the system / theme font
 
               const val DEF_X = 20f
               const val DEF_Y = 0f
-              const val DEF_SIZE = 15.8f
-              const val DEF_FONT = "system"
+              const val DEF_SIZE = 15.8f      // status_bar_clock_size from your theme
+              const val DEF_FONT = FONT_SYSTEM
 
               fun sp(c: Context): SharedPreferences = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
-          }
 
-          // Last Smart-mode detection result, shown in the app to help debugging.
-          object Diag {
-              @Volatile var smart: String = "not checked yet"
+              fun colorMode(p: SharedPreferences): Int {
+                  if (p.contains(COLOR)) return p.getInt(COLOR, MODE_WHITE)
+                  return if (p.getBoolean(WHITE, true)) MODE_WHITE else MODE_BLACK
+              }
           }
           KX_EOF
           mkdir -p app/src/main/java/com/kyrox/statusclock
-          mkdir -p app/src/main/java/com/kyrox/statusclock
-          cat > app/src/main/java/com/kyrox/statusclock/Healer.kt <<'KX_EOF'
+          cat > app/src/main/java/com/kyrox/statusclock/FontLoader.kt <<'KX_EOF'
           package com.kyrox.statusclock
 
-          import android.app.job.JobInfo
-          import android.app.job.JobParameters
-          import android.app.job.JobScheduler
-          import android.app.job.JobService
-          import android.content.BroadcastReceiver
-          import android.content.ComponentName
-          import android.content.Context
-          import android.content.Intent
-          import android.content.pm.PackageManager
-          import android.provider.Settings
+          import android.graphics.Typeface
+          import android.os.Build
+          import java.io.File
+          import java.io.RandomAccessFile
 
-          // Optional self-recovery. Android only lets an app switch its own accessibility service back on
-          // if it holds WRITE_SECURE_SETTINGS, which must be granted once from a computer:
-          //   adb shell pm grant com.kyrox.statusclock android.permission.WRITE_SECURE_SETTINGS
-          object Healer {
-              private const val PERM = "android.permission.WRITE_SECURE_SETTINGS"
-              private const val JOB_ID = 4711
+          /** Builds the clock typeface and makes the weight setting actually work. */
+          object FontLoader {
 
-              fun canHeal(c: Context): Boolean =
-                  c.checkSelfPermission(PERM) == PackageManager.PERMISSION_GRANTED
+              class Result(val typeface: Typeface, val fakeBold: Boolean)
 
-              private fun component(c: Context) = ComponentName(c, ClockOverlayService::class.java)
-
-              fun isEnabled(c: Context): Boolean {
-                  val s = Settings.Secure.getString(c.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-                      ?: return false
-                  val full = component(c).flattenToString()
-                  val short = component(c).flattenToShortString()
-                  return s.split(':').any { it.equals(full, true) || it.equals(short, true) }
+              fun load(name: String, weight: Int): Result {
+                  return try {
+                      when {
+                          name.startsWith("/") -> fromFile(File(name), weight)
+                          name == Prefs.FONT_SYSTEM -> Result(withWeight(Typeface.DEFAULT, weight), false)
+                          else -> Result(withWeight(Typeface.create(name, Typeface.NORMAL), weight), false)
+                      }
+                  } catch (_: Throwable) {
+                      Result(Typeface.DEFAULT, false)
+                  }
               }
 
-              fun ensure(c: Context) {
+              /** True if the file can be loaded as a font. */
+              fun canOpen(path: String): Boolean {
+                  return try { build(File(path), 0, false) != null } catch (_: Throwable) { false }
+              }
+
+              private fun fromFile(f: File, weight: Int): Result {
+                  val variable = weight >= 1 && hasWeightAxis(f)
+                  val t = build(f, weight, variable) ?: return Result(Typeface.DEFAULT, false)
+                  // Static (non-variable) font file: it only has the weights it ships with.
+                  // For a heavy request, thicken the strokes so the setting still has an effect.
+                  return Result(t, weight >= 600 && !variable)
+              }
+
+              private fun build(f: File, weight: Int, variable: Boolean): Typeface? {
+                  if (!f.isFile) return null
+                  val b = Typeface.Builder(f)
+                  if (variable) b.setFontVariationSettings("'wght' $weight")
+                  return b.build()
+              }
+
+              private fun withWeight(base: Typeface, weight: Int): Typeface {
+                  if (weight < 1) return base
+                  return if (Build.VERSION.SDK_INT >= 28) {
+                      Typeface.create(base, weight.coerceIn(1, 1000), false)
+                  } else {
+                      Typeface.create(base, if (weight >= 600) Typeface.BOLD else Typeface.NORMAL)
+                  }
+              }
+
+              /** Looks for an 'fvar' table, i.e. the font is a variable font. */
+              private fun hasWeightAxis(f: File): Boolean {
                   try {
-                      if (!canHeal(c)) return
-                      if (!Prefs.sp(c).getBoolean(Prefs.HEAL, true)) return
-                      if (isEnabled(c)) return
-                      val cr = c.contentResolver
-                      val cur = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-                      val id = component(c).flattenToString()
-                      val next = if (cur.isEmpty()) id else cur + ":" + id
-                      Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, next)
-                      Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                      RandomAccessFile(f, "r").use { r ->
+                          val first = r.readInt()
+                          if (first == 0x74746366) {            // 'ttcf' collection
+                              r.readInt()                        // version
+                              val n = r.readInt()
+                              if (n < 1) return false
+                              val off = r.readInt().toLong() and 0xFFFFFFFFL
+                              r.seek(off)
+                              r.readInt()                        // sfnt version
+                          }
+                          val numTables = r.readUnsignedShort()
+                          r.skipBytes(6)
+                          for (i in 0 until numTables) {
+                              val tag = r.readInt()
+                              r.skipBytes(12)
+                              if (tag == 0x66766172) return true // 'fvar'
+                          }
+                      }
                   } catch (_: Throwable) {}
-              }
-
-              fun schedule(c: Context) {
-                  try {
-                      if (!canHeal(c)) return
-                      val js = c.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
-                      if (js.getPendingJob(JOB_ID) != null) return
-                      val job = JobInfo.Builder(JOB_ID, ComponentName(c, HealJob::class.java))
-                          .setPeriodic(15 * 60 * 1000L)
-                          .setPersisted(true)
-                          .build()
-                      js.schedule(job)
-                  } catch (_: Throwable) {}
-              }
-          }
-
-          class BootReceiver : BroadcastReceiver() {
-              override fun onReceive(context: Context, intent: Intent?) {
-                  Healer.ensure(context)
-                  Healer.schedule(context)
-              }
-          }
-
-          class HealJob : JobService() {
-              override fun onStartJob(params: JobParameters?): Boolean {
-                  Healer.ensure(this)
                   return false
               }
-
-              override fun onStopJob(params: JobParameters?): Boolean = false
           }
           KX_EOF
+          mkdir -p app/src/main/java/com/kyrox/statusclock
           cat > app/src/main/java/com/kyrox/statusclock/ClockOverlayService.kt <<'KX_EOF'
           package com.kyrox.statusclock
 
           import android.accessibilityservice.AccessibilityService
-          import android.app.KeyguardManager
+          import android.app.Notification
+          import android.app.Service
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.PendingIntent
           import android.content.BroadcastReceiver
           import android.content.Context
           import android.content.Intent
           import android.content.IntentFilter
           import android.content.SharedPreferences
           import android.content.pm.PackageManager
+          import android.content.pm.ServiceInfo
           import android.content.res.Configuration
           import android.graphics.Bitmap
           import android.graphics.Color
           import android.graphics.PixelFormat
-          import android.graphics.Rect
-          import android.graphics.Typeface
           import android.os.Build
           import android.os.Handler
           import android.os.Looper
@@ -328,543 +364,377 @@ jobs:
           import android.view.View
           import android.view.WindowManager
           import android.view.accessibility.AccessibilityEvent
-          import android.view.accessibility.AccessibilityWindowInfo
           import android.view.inputmethod.InputMethodManager
           import android.widget.TextClock
+          import java.util.concurrent.ExecutorService
           import java.util.concurrent.Executors
+          import kotlin.math.min
 
+          /**
+           * Draws a clock where the status bar clock normally sits, but only while the
+           * home screen (launcher) is the active window.
+           *
+           * Speed: the overlay window is created once and only toggled VISIBLE/INVISIBLE,
+           * the home screen is detected straight from the window-change event (no cross-process
+           * queries on the fast path) and all preferences are cached in memory.
+           */
           class ClockOverlayService : AccessibilityService() {
-
-              private val handler = Handler(Looper.getMainLooper())
-              private val worker = Executors.newSingleThreadExecutor()
 
               private var wm: WindowManager? = null
               private var clockView: TextClock? = null
-              private var attached = false      // overlay window is added to the WindowManager (kept for the whole service life)
-              private var shown = false         // overlay is currently visible
+              private var attached = false
+              private var shown = false
               private var lastPkg: String? = null
-              private var homePkgs: Set<String> = emptySet()
+              private var homePkgs: Set<String> = setOf("com.miui.home")
               private var imePkgs: Set<String> = emptySet()
-              private var clockWidth = 0
-              private var darkText = false      // automatic colour: true = black text, false = white text
-              private var smartMiss = 0
-              private var tickerOn = false
-              private var shotInFlight = false
-              private var lastShotAt = 0L
-              private var smartVerdict: Boolean? = null   // null = unknown, true = real clock is drawn at our spot
-              private var smartBusy = false
-              private var smartCheckAt = 0L
-              private var smartFails = 0
+              private val handler = Handler(Looper.getMainLooper())
+              private val bg: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
 
-              private val clockIds = listOf("com.android.systemui:id/clock")
+              // Cached preferences (no SharedPreferences reads on the hot path)
+              private var calibrating = false
+              private var smart = false
+              private var colorMode = Prefs.MODE_WHITE
+              private var posX = Prefs.DEF_X
 
-              // Every callback is wrapped so one unexpected exception can never crash the process.
-              // A crashing accessibility service is switched off by Android and has to be re-enabled by hand.
-              private fun safe(block: () -> Unit) {
-                  try { block() } catch (_: Throwable) {}
-              }
+              // Result of the last background brightness sample: true = dark background -> white text
+              private var bgDark = true
+              private var lastShot = 0L
+
+              private val verifyRunnable = Runnable { evaluate() }
+              private val sampleRunnable = Runnable { sampleBackground() }
 
               private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-                  handler.post { safe { smartVerdict = null; applyStyle(); evaluate() } }
-              }
-
-              private val screenReceiver = object : BroadcastReceiver() {
-                  override fun onReceive(context: Context?, intent: Intent?) {
-                      safe {
-                          when (intent?.action) {
-                              Intent.ACTION_SCREEN_OFF -> { setOnHome(false); setShown(false) }
-                              Intent.ACTION_SCREEN_ON -> { resolvePackages(); onWake() }
-                              Intent.ACTION_USER_PRESENT -> onWake()
-                              Intent.ACTION_CONFIGURATION_CHANGED -> applyStyle()
-                          }
-                      }
-                  }
-              }
-
-              private val evalRunnable = Runnable { safe { evaluate() } }
-
-              private val rootEvalRunnable = Runnable {
-                  safe {
-                      val a = activePackage()
-                      if (a != null) lastPkg = a
+                  handler.post {
+                      reloadPrefs()
+                      applyStyle()
+                      updateServiceInfo()
+                      updateKeepAlive()
                       evaluate()
+                      if (shown) requestSamples()
                   }
               }
 
-              private val smartRunnable = Runnable { safe { smartCapture() } }
+              private var fgOn = false
 
-              // While on the home screen: re-check Smart mode and re-sample the background colour once a second.
-              private val ticker = object : Runnable {
-                  override fun run() {
-                      if (!tickerOn) return
-                      safe {
-                          if (smartOn()) {
-                              // Hidden because the real clock was drawn: keep polling (invisible, no blink).
-                              if (smartVerdict == true) smartVerdict = null
-                              evaluate()
+              /**
+               * Persistence: running as a foreground service (with a minimal, silent notification)
+               * makes the system far less willing to kill the process.
+               */
+              private fun updateKeepAlive() {
+                  val want = Prefs.sp(this).getBoolean(Prefs.KEEP, true)
+                  if (want == fgOn) return
+                  try {
+                      if (want) {
+                          val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                          val ch = NotificationChannel(
+                              "keep_alive", getString(R.string.keep_channel), NotificationManager.IMPORTANCE_MIN
+                          )
+                          ch.setShowBadge(false)
+                          nm.createNotificationChannel(ch)
+                          val open = PendingIntent.getActivity(
+                              this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+                          )
+                          val n = Notification.Builder(this, "keep_alive")
+                              .setSmallIcon(R.drawable.ic_stat_clock)
+                              .setContentTitle(getString(R.string.keep_title))
+                              .setContentText(getString(R.string.keep_text))
+                              .setOngoing(true)
+                              .setContentIntent(open)
+                              .build()
+                          if (Build.VERSION.SDK_INT >= 34) {
+                              startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                          } else {
+                              startForeground(1, n)
                           }
-                          requestColorSample(false)
+                          fgOn = true
+                      } else {
+                          stopForeground(Service.STOP_FOREGROUND_REMOVE)
+                          fgOn = false
                       }
-                      if (tickerOn) handler.postDelayed(this, 1000)
+                  } catch (_: Throwable) {
+                      fgOn = false
+                  }
+              }
+
+              private val receiver = object : BroadcastReceiver() {
+                  override fun onReceive(context: Context?, intent: Intent?) {
+                      when (intent?.action) {
+                          Intent.ACTION_SCREEN_OFF -> setShown(false)
+                          Intent.ACTION_CONFIGURATION_CHANGED -> {
+                              // Theme / font / dark-mode change: rebuild the style from the system.
+                              applyStyle()
+                              schedule(0)
+                          }
+                          else -> schedule(0)
+                      }
                   }
               }
 
               override fun onServiceConnected() {
                   super.onServiceConnected()
-                  safe {
-                      wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                      resolvePackages()
+                  wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                  resolvePackages()
+                  reloadPrefs()
 
-                      val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-                      darkText = !night
-
-                      clockView = TextClock(this).apply {
-                          includeFontPadding = false
-                          gravity = Gravity.CENTER_VERTICAL or Gravity.START
-                          visibility = View.INVISIBLE
-                      }
-                      applyStyle()
-                      ensureAttached()
-
-                      Prefs.sp(this).registerOnSharedPreferenceChangeListener(prefListener)
-                      val filter = IntentFilter().apply {
-                          addAction(Intent.ACTION_SCREEN_OFF)
-                          addAction(Intent.ACTION_SCREEN_ON)
-                          addAction(Intent.ACTION_USER_PRESENT)
-                          addAction(Intent.ACTION_CONFIGURATION_CHANGED)
-                      }
-                      if (Build.VERSION.SDK_INT >= 33) {
-                          registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-                      } else {
-                          registerReceiver(screenReceiver, filter)
-                      }
-                      onWake()
+                  clockView = TextClock(this).apply {
+                      includeFontPadding = false
+                      gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                      visibility = View.INVISIBLE
                   }
+                  applyStyle()
+                  updateServiceInfo()
+                  attach()
+                  updateKeepAlive()
+
+                  Prefs.sp(this).registerOnSharedPreferenceChangeListener(prefListener)
+                  val filter = IntentFilter().apply {
+                      addAction(Intent.ACTION_SCREEN_OFF)
+                      addAction(Intent.ACTION_USER_PRESENT)
+                      addAction(Intent.ACTION_CONFIGURATION_CHANGED)
+                  }
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                  } else {
+                      registerReceiver(receiver, filter)
+                  }
+                  schedule(0)
               }
 
               override fun onAccessibilityEvent(event: AccessibilityEvent?) {
                   val e = event ?: return
-                  safe { handleEvent(e) }
+                  val pkg = e.packageName?.toString() ?: return
+                  if (pkg == packageName) return
+
+                  when (e.eventType) {
+                      AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                          lastPkg = pkg
+                          if (calibrating) return
+                          when {
+                              // Fast path: the launcher just came up -> show right away.
+                              homePkgs.contains(pkg) -> {
+                                  if (smart) schedule(60) else setShown(true)
+                              }
+                              // Shade / keyboard: the window underneath may still be home, so check.
+                              pkg == "com.android.systemui" || imePkgs.contains(pkg) -> schedule(120)
+                              // Any other app: hide immediately.
+                              else -> setShown(false)
+                          }
+                      }
+                      AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                          if (!shown) return
+                          if (smart) schedule(120)
+                          if (colorMode == Prefs.MODE_BACKGROUND) {
+                              handler.removeCallbacks(sampleRunnable)
+                              handler.postDelayed(sampleRunnable, 250)
+                          }
+                      }
+                  }
               }
 
               override fun onInterrupt() {}
 
+              override fun onConfigurationChanged(newConfig: Configuration) {
+                  super.onConfigurationChanged(newConfig)
+                  handler.post { applyStyle() }
+              }
+
               override fun onDestroy() {
-                  safe { handler.removeCallbacksAndMessages(null) }
-                  safe { Prefs.sp(this).unregisterOnSharedPreferenceChangeListener(prefListener) }
-                  safe { unregisterReceiver(screenReceiver) }
-                  safe { clockView?.let { wm?.removeViewImmediate(it) } }
-                  safe { worker.shutdown() }
-                  attached = false
-                  shown = false
-                  tickerOn = false
+                  handler.removeCallbacksAndMessages(null)
+                  try { Prefs.sp(this).unregisterOnSharedPreferenceChangeListener(prefListener) } catch (_: Exception) {}
+                  try { unregisterReceiver(receiver) } catch (_: Exception) {}
+                  try { bg.shutdownNow() } catch (_: Exception) {}
+                  detach()
                   super.onDestroy()
               }
 
-              // ---------------------------------------------------------------- events
+              // ---------------------------------------------------------------- state
 
-              private fun handleEvent(e: AccessibilityEvent) {
-                  val pkg = e.packageName?.toString()
-                  when (e.eventType) {
-                      AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                          if (pkg == null || imePkgs.contains(pkg)) return
-                          if (isSystemUi(pkg)) {
-                              // Notification shade / control centre opened or closed: ask who is really on top.
-                              scheduleRootEval(100)
-                              return
-                          }
-                          // Fast path: decide straight from the event, no extra IPC and no delay.
-                          lastPkg = pkg
-                          evaluate()
+              private fun reloadPrefs() {
+                  val p = Prefs.sp(this)
+                  calibrating = p.getBoolean(Prefs.CAL, false)
+                  smart = p.getBoolean(Prefs.SMART, false)
+                  colorMode = Prefs.colorMode(p)
+                  posX = p.getFloat(Prefs.X, Prefs.DEF_X)
+              }
+
+              /** Only listen for scroll events when a mode actually needs them. */
+              private fun updateServiceInfo() {
+                  try {
+                      val info = serviceInfo ?: return
+                      var t = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                      if (smart || colorMode == Prefs.MODE_BACKGROUND) t = t or AccessibilityEvent.TYPE_VIEW_SCROLLED
+                      if (info.eventTypes != t) {
+                          info.eventTypes = t
+                          serviceInfo = info
                       }
-                      AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                          if (smartOn()) scheduleEval(150)
-                      }
-                      AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                          if (pkg == packageName) return
-                          requestColorSample(false)
-                      }
-                  }
+                  } catch (_: Exception) {}
               }
 
-              private fun isSystemUi(pkg: String): Boolean = pkg == "android" || pkg.contains("systemui")
-
-              private fun scheduleEval(ms: Long) {
-                  handler.removeCallbacks(evalRunnable)
-                  handler.postDelayed(evalRunnable, ms)
+              private fun schedule(delayMs: Long) {
+                  handler.removeCallbacks(verifyRunnable)
+                  handler.postDelayed(verifyRunnable, delayMs)
               }
-
-              private fun scheduleRootEval(ms: Long) {
-                  handler.removeCallbacks(rootEvalRunnable)
-                  handler.postDelayed(rootEvalRunnable, ms)
-              }
-
-              private fun smartOn(): Boolean = Prefs.sp(this).getBoolean(Prefs.SMART, false)
-
-              private fun onWake() {
-                  val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-                  if (km.isKeyguardLocked) { setOnHome(false); setShown(false); return }
-                  val a = activePackage()
-                  if (a != null) lastPkg = a
-                  evaluate()
-              }
-
-              private fun activePackage(): String? =
-                  try { rootInActiveWindow?.packageName?.toString() } catch (_: Throwable) { null }
 
               private fun resolvePackages() {
-                  val homes = mutableSetOf<String>()
+                  val set = mutableSetOf("com.miui.home")
                   try {
                       val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-                      val pkg = packageManager.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
-                      if (pkg != null && pkg != "android") homes.add(pkg)
-                      if (homes.isEmpty()) {
-                          for (ri in packageManager.queryIntentActivities(i, PackageManager.MATCH_DEFAULT_ONLY)) {
-                              val p = ri.activityInfo?.packageName ?: continue
-                              if (p != "android" && p != "com.android.settings") homes.add(p)
-                          }
-                      }
-                  } catch (_: Throwable) {}
-                  homePkgs = homes
-
-                  val imes = mutableSetOf<String>()
+                      val pkg = packageManager
+                          .resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)
+                          ?.activityInfo?.packageName
+                      if (pkg != null && pkg != "android") set.add(pkg)
+                  } catch (_: Exception) {}
+                  homePkgs = set
                   try {
                       val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                      for (m in imm.enabledInputMethodList) imes.add(m.packageName)
-                  } catch (_: Throwable) {}
-                  imePkgs = imes
+                      imePkgs = imm.enabledInputMethodList.map { it.packageName }.toSet()
+                  } catch (_: Exception) {}
               }
 
-              // ---------------------------------------------------------------- decision
-
+              /** Slow-path check: ask the system which window is really active. */
               private fun evaluate() {
-                  val p = Prefs.sp(this)
-
-                  if (p.getBoolean(Prefs.CAL, false)) { setOnHome(false); setShown(true); return }
+                  if (calibrating) { setShown(true); return }
 
                   val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  if (!pm.isInteractive) { setOnHome(false); setShown(false); return }
+                  if (!pm.isInteractive) { setShown(false); return }
 
-                  var pkg = lastPkg
-                  if (pkg == null) { pkg = activePackage(); lastPkg = pkg }
+                  var pkg: String? = null
+                  try {
+                      val root = rootInActiveWindow
+                      pkg = root?.packageName?.toString()
+                      root?.recycle()
+                  } catch (_: Exception) {}
+                  if (pkg == null) pkg = lastPkg
 
                   val onHome = pkg != null && homePkgs.contains(pkg)
-                  setOnHome(onHome)
                   if (!onHome) { setShown(false); return }
 
-                  if (p.getBoolean(Prefs.SMART, false)) {
-                      if (realClockVisible()) { smartMiss = 0; setShown(false); return }
-                      // Not seen: draw ours, but when coming back from hidden wait for a second miss (no flicker).
-                      smartMiss++
-                      if (!shown && smartMiss < 2) { scheduleEval(250); return }
-                  }
+                  if (smart && realClockVisible()) { setShown(false); return }
                   setShown(true)
               }
 
-              private fun setOnHome(on: Boolean) {
-                  if (on == tickerOn) return
-                  tickerOn = on
-                  if (on) smartVerdict = null
-                  handler.removeCallbacks(ticker)
-                  if (on) handler.postDelayed(ticker, 1000)
-              }
-
-              // ---------------------------------------------------------------- real clock detection (Smart mode)
-
-              // Smart mode (Android 11+): hide our clock for a moment, take a screenshot and look at the pixels where
-              // the clock sits. White/black text-like pixels there mean the system is drawing its own clock.
-              private fun startSmartCheck() {
-                  if (smartBusy) return
-                  val now = SystemClock.elapsedRealtime()
-                  if (now - smartCheckAt < 1200) return      // the ticker retries
-                  smartBusy = true
-                  smartCheckAt = now
-                  handler.postDelayed(smartRunnable, 150)     // let the hidden overlay's frame disappear
-              }
-
-              private fun smartCapture() {
-                  if (Build.VERSION.SDK_INT < 30) { smartBusy = false; return }
-                  val now = SystemClock.elapsedRealtime()
-                  val wait = 1100L - (now - lastShotAt)
-                  if (wait > 0) { handler.postDelayed(smartRunnable, wait); return }
-                  lastShotAt = now
-                  try {
-                      takeScreenshot(Display.DEFAULT_DISPLAY, worker, object : AccessibilityService.TakeScreenshotCallback {
-                          override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-                              val r = try { analyze(screenshot) } catch (_: Throwable) { null }
-                              handler.post {
-                                  smartBusy = false
-                                  safe {
-                                      if (r != null) {
-                                          smartFails = 0
-                                          applyLuma(r[0])
-                                          val real = r[1] >= 0.04f
-                                          smartVerdict = real
-                                          Diag.smart = "text pixels " + Math.round(r[1] * 100) + "% -> " +
-                                              (if (real) "real clock drawn (ours hidden)" else "no real clock (ours shown)")
-                                      } else {
-                                          failSmart("could not read screenshot")
-                                      }
-                                      evaluate()
-                                  }
-                              }
-                          }
-
-                          override fun onFailure(errorCode: Int) {
-                              handler.post {
-                                  smartBusy = false
-                                  safe { failSmart("screenshot error " + errorCode); evaluate() }
-                              }
-                          }
-                      })
-                  } catch (_: Throwable) {
-                      smartBusy = false
-                      failSmart("screenshot not allowed")
-                  }
-              }
-
-              // After a few failed checks in a row, show the clock anyway rather than leaving it hidden forever.
-              private fun failSmart(why: String) {
-                  smartFails++
-                  Diag.smart = why + " (" + smartFails + ")"
-                  if (smartFails >= 3) smartVerdict = false
-              }
-
-              // Returns a short description of the real status bar clock if one is visible
-              // at the spot where our clock sits, otherwise null.
-              private fun findRealClock(): String? {
+              /** Smart mode: is the system's own status bar clock currently visible? */
+              private fun realClockVisible(): Boolean {
                   try {
                       for (w in windows) {
                           val root = w.root ?: continue
-                          if (root.packageName?.toString() == packageName) continue
-                          for (id in clockIds) {
-                              val nodes = root.findAccessibilityNodeInfosByViewId(id)
-                              if (nodes != null) {
-                                  for (n in nodes) {
-                                      if (n.isVisibleToUser) return id.substringAfter("/") + " (window type " + w.type + ")"
-                                  }
+                          val nodes = root.findAccessibilityNodeInfosByViewId("com.android.systemui:id/clock")
+                          var visible = false
+                          if (nodes != null) {
+                              for (n in nodes) {
+                                  if (n.isVisibleToUser) visible = true
+                                  n.recycle()
                               }
                           }
+                          root.recycle()
+                          if (visible) return true
                       }
-                  } catch (_: Throwable) {}
-                  return null
+                  } catch (_: Exception) {}
+                  return false
               }
 
-              private fun realClockVisible(): Boolean {
-                  val hit = findRealClock()
-                  Diag.smart = if (hit != null) "real clock seen: " + hit + " -> ours hidden" else "no real clock seen -> ours shown"
-                  return hit != null
-              }
+              // ------------------------------------------------------------- window
 
-              // ---------------------------------------------------------------- show / hide
-
-              private fun ensureAttached(): Boolean {
-                  if (attached) return true
-                  val v = clockView ?: return false
-                  return try {
+              private fun attach() {
+                  val v = clockView ?: return
+                  if (attached) return
+                  try {
                       v.visibility = View.INVISIBLE
                       wm?.addView(v, params())
                       attached = true
-                      true
-                  } catch (_: Throwable) {
-                      false
-                  }
+                  } catch (_: Exception) {}
               }
 
-              // The overlay window stays attached; we only flip its visibility. That is instant,
-              // unlike adding/removing a window on every app switch.
+              private fun detach() {
+                  val v = clockView ?: return
+                  if (!attached) return
+                  try { wm?.removeViewImmediate(v) } catch (_: Exception) {}
+                  attached = false
+                  shown = false
+              }
+
+              /** The window stays attached; showing/hiding is just a visibility flip (very fast). */
               private fun setShown(on: Boolean) {
-                  val v = clockView ?: return
                   if (on) {
-                      if (!ensureAttached()) return
-                      if (!shown || v.visibility != View.VISIBLE) {
-                          shown = true
-                          v.visibility = View.VISIBLE
-                          requestColorSample(true)
-                      }
-                  } else if (shown) {
-                      shown = false
-                      v.visibility = View.INVISIBLE
+                      if (!attached) attach()
+                      if (!attached) return
                   }
-              }
-
-              // ---------------------------------------------------------------- automatic colour
-
-              private fun applyColor() {
                   val v = clockView ?: return
-                  val cal = Prefs.sp(this).getBoolean(Prefs.CAL, false)
-                  v.setTextColor(
-                      if (cal) 0xFFFF3B30.toInt()
-                      else if (darkText) Color.BLACK
-                      else Color.WHITE
-                  )
-              }
-
-              private fun applyLuma(luma: Float) {
-                  // Hysteresis so the colour does not flip back and forth on mid-tone wallpapers.
-                  val newDark = if (luma > 0.6f) true else if (luma < 0.45f) false else darkText
-                  if (newDark != darkText) {
-                      darkText = newDark
+                  if (shown == on) return
+                  shown = on
+                  v.visibility = if (on) View.VISIBLE else View.INVISIBLE
+                  if (on) {
                       applyColor()
+                      requestSamples()
+                  } else {
+                      handler.removeCallbacks(sampleRunnable)
                   }
               }
 
-              private fun requestColorSample(force: Boolean) {
-                  if (Build.VERSION.SDK_INT < 30) return
-                  if (!shown) return
-                  if (Prefs.sp(this).getBoolean(Prefs.CAL, false)) return
-                  val now = SystemClock.elapsedRealtime()
-                  if (shotInFlight && now - lastShotAt > 5000) shotInFlight = false
-                  if (shotInFlight || now - lastShotAt < (if (force) 1100L else 2000L)) return
-                  lastShotAt = now
-                  shotInFlight = true
-                  try {
-                      takeScreenshot(Display.DEFAULT_DISPLAY, worker, object : AccessibilityService.TakeScreenshotCallback {
-                          override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-                              val r = try { analyze(screenshot) } catch (_: Throwable) { null }
-                              handler.post {
-                                  shotInFlight = false
-                                  if (r != null) safe { applyLuma(r[0]) }
-                              }
-                          }
-
-                          override fun onFailure(errorCode: Int) {
-                              handler.post { shotInFlight = false }
-                          }
-                      })
-                  } catch (_: Throwable) {
-                      shotInFlight = false
-                  }
-              }
-
-              // Returns [median brightness of the strip behind the status bar, fraction of text-like pixels where our
-              // clock sits]. Pixels that are almost pure black are ignored for the brightness so the camera
-              // cut-out does not skew it.
-              private fun analyze(result: AccessibilityService.ScreenshotResult): FloatArray? {
-                  val hb = result.hardwareBuffer
-                  try {
-                      val hw = Bitmap.wrapHardwareBuffer(hb, result.colorSpace) ?: return null
-                      val bmp = hw.copy(Bitmap.Config.ARGB_8888, false)
-                      hw.recycle()
-                      if (bmp == null) return null
-
-                      val d = resources.displayMetrics.density
-                      val bandH = minOf(statusBarHeightPx(), bmp.height)
-                      val left = Prefs.sp(this).getFloat(Prefs.X, Prefs.DEF_X) * d
-                      val clockL = (left - 4 * d).toInt()
-                      val clockR = (left + clockWidth + 4 * d).toInt()
-
-                      // 1) background brightness, left part of the bar but not under our clock
-                      val maxX = (bmp.width * 0.45f).toInt()
-                      val step = maxOf(1, maxX / 30)
-                      val rows = intArrayOf(bandH / 4, bandH / 2, (bandH * 3) / 4)
-                      val vals = ArrayList<Float>()
-                      var x = 0
-                      while (x < maxX) {
-                          if (x < clockL || x > clockR) {
-                              for (y in rows) vals.add(lumaAt(bmp.getPixel(x, y)))
-                          }
-                          x += step
-                      }
-                      val lit = ArrayList<Float>()
-                      for (v in vals) if (v > 0.02f) lit.add(v)
-                      lit.sort()
-                      val luma = if (lit.isEmpty()) 0f else lit[lit.size / 2]
-
-                      // 2) text-like pixels inside our clock's box (only meaningful while our overlay is hidden)
-                      val x0 = maxOf(0, left.toInt())
-                      val x1 = minOf(bmp.width - 1, (left + clockWidth).toInt())
-                      val box = ArrayList<Float>()
-                      var yy = 0
-                      while (yy < bandH) {
-                          var xx = x0
-                          while (xx <= x1) {
-                              box.add(lumaAt(bmp.getPixel(xx, yy)))
-                              xx += 2
-                          }
-                          yy += 2
-                      }
-                      var frac = 0f
-                      if (box.size > 20) {
-                          val sorted = ArrayList<Float>(box)
-                          sorted.sort()
-                          val med = sorted[sorted.size / 2]
-                          var hit = 0
-                          for (l in box) {
-                              if (Math.abs(l - med) > 0.35f && (l > 0.85f || l < 0.15f)) hit++
-                          }
-                          frac = hit.toFloat() / box.size
-                      }
-                      bmp.recycle()
-                      return floatArrayOf(luma, frac)
-                  } finally {
-                      try { hb.close() } catch (_: Throwable) {}
-                  }
-              }
-
-              private fun lumaAt(c: Int): Float =
-                  (0.299f * Color.red(c) + 0.587f * Color.green(c) + 0.114f * Color.blue(c)) / 255f
-
-              // ---------------------------------------------------------------- style / layout
+              // -------------------------------------------------------------- style
 
               private fun applyStyle() {
                   val v = clockView ?: return
                   val p = Prefs.sp(this)
 
-                  // 12-hour 'h' and 24-hour 'H' both drop the leading zero. No AM/PM.
-                  v.format12Hour = "h:mm"
+                  v.format12Hour = if (p.getBoolean(Prefs.AMPM, false)) "h:mm a" else "h:mm"
+                  // No leading zero on the hour (9:05, not 09:05) in both 12h and 24h mode.
                   v.format24Hour = "H:mm"
                   v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, p.getFloat(Prefs.SIZE, Prefs.DEF_SIZE))
 
-                  // Tabular numbers and left alignment lock the digit positions.
-                  v.fontFeatureSettings = "tnum"
-                  v.textAlignment = View.TEXT_ALIGNMENT_VIEW_START
-
                   val fontName = p.getString(Prefs.FONT, Prefs.DEF_FONT) ?: Prefs.DEF_FONT
                   val weight = p.getFloat(Prefs.WGHT, 0f).toInt()
-                  val typeface = if (fontName == "system") {
-                      Typeface.create("sans-serif", if (weight >= 600) Typeface.BOLD else Typeface.NORMAL)
-                  } else {
-                      FontResolver.resolve(fontName, weight)
-                  }
-                  v.typeface = typeface
-
-                  if (weight > 0 && Build.VERSION.SDK_INT >= 26 && fontName.startsWith("/")) {
-                      v.setFontVariationSettings("'wght' $weight")
-                  } else {
-                      v.setFontVariationSettings(null)
-                  }
-
-                  // Lock the view width to the widest possible time so the position never shifts.
-                  val textWidth = v.paint.measureText("23:88").toInt()
-                  clockWidth = textWidth + (6 * resources.displayMetrics.density).toInt()
+                  val f = FontLoader.load(fontName, weight)
+                  v.paint.isFakeBoldText = f.fakeBold
+                  v.typeface = f.typeface
+                  v.invalidate()
 
                   applyColor()
-
                   if (attached) {
-                      try { wm?.updateViewLayout(v, params()) } catch (_: Throwable) {}
+                      try { wm?.updateViewLayout(v, params()) } catch (_: Exception) {}
                   }
+              }
+
+              private fun isNight(): Boolean =
+                  (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                      Configuration.UI_MODE_NIGHT_YES
+
+              private fun textColor(): Int {
+                  if (calibrating) return 0xFFFF3B30.toInt()
+                  return when (colorMode) {
+                      Prefs.MODE_BLACK -> Color.BLACK
+                      Prefs.MODE_DAYNIGHT -> if (isNight()) Color.WHITE else Color.BLACK
+                      Prefs.MODE_BACKGROUND ->
+                          if (Build.VERSION.SDK_INT >= 30) (if (bgDark) Color.WHITE else Color.BLACK)
+                          else (if (isNight()) Color.WHITE else Color.BLACK)
+                      else -> Color.WHITE
+                  }
+              }
+
+              private fun applyColor() {
+                  clockView?.setTextColor(textColor())
               }
 
               private fun params(): WindowManager.LayoutParams {
                   val d = resources.displayMetrics.density
                   val p = Prefs.sp(this)
-                  val width = if (clockWidth > 0) clockWidth else WindowManager.LayoutParams.WRAP_CONTENT
                   val lp = WindowManager.LayoutParams(
-                      width,
+                      WindowManager.LayoutParams.WRAP_CONTENT,
                       statusBarHeightPx(),
                       WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                       WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                           WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                           WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                          WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                          WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                          WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                       PixelFormat.TRANSLUCENT
                   )
                   lp.gravity = Gravity.TOP or Gravity.START
                   lp.x = (p.getFloat(Prefs.X, Prefs.DEF_X) * d).toInt()
                   lp.y = (p.getFloat(Prefs.Y, Prefs.DEF_Y) * d).toInt()
                   if (Build.VERSION.SDK_INT >= 28) {
-                      lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                      lp.layoutInDisplayCutoutMode =
+                          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
                   }
                   lp.title = "KyroxStatusClock"
                   return lp
@@ -875,38 +745,101 @@ jobs:
                   return if (id > 0) resources.getDimensionPixelSize(id)
                   else (24 * resources.displayMetrics.density).toInt()
               }
-          }
-          KX_EOF
-          mkdir -p app/src/main/java/com/kyrox/statusclock
-          cat > app/src/main/java/com/kyrox/statusclock/FontResolver.kt <<'KX_EOF'
-          package com.kyrox.statusclock
 
-          import android.graphics.Typeface
-          import android.os.Build
-          import java.io.File
+              // ------------------------------------------- "match the background" mode
 
-          object FontResolver {
-              fun resolve(fontName: String, weight: Int): Typeface {
+              /** Take a few samples shortly after showing (lets the home transition settle). */
+              private fun requestSamples() {
+                  if (Build.VERSION.SDK_INT < 30 || colorMode != Prefs.MODE_BACKGROUND || calibrating) return
+                  handler.removeCallbacks(sampleRunnable)
+                  handler.postDelayed(sampleRunnable, 30)
+                  handler.postDelayed(sampleRunnable, 700)
+              }
+
+              private fun sampleBackground() {
+                  if (Build.VERSION.SDK_INT < 30) return
+                  if (!shown || colorMode != Prefs.MODE_BACKGROUND || calibrating) return
+                  val now = SystemClock.uptimeMillis()
+                  if (now - lastShot < 300) return
+                  lastShot = now
                   try {
-                      if (fontName.startsWith("/")) {
-                          return createFromFile(fontName, weight)
+                      takeScreenshot(Display.DEFAULT_DISPLAY, bg,
+                          object : AccessibilityService.TakeScreenshotCallback {
+                              override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+                                  handleShot(result)
+                              }
+                              override fun onFailure(errorCode: Int) {}
+                          })
+                  } catch (_: Throwable) {}
+              }
+
+              /** Runs on the background thread. */
+              private fun handleShot(r: AccessibilityService.ScreenshotResult) {
+                  val hb = r.hardwareBuffer
+                  try {
+                      val hw = Bitmap.wrapHardwareBuffer(hb, r.colorSpace) ?: return
+                      val sw = hw.copy(Bitmap.Config.ARGB_8888, false)
+                      hw.recycle()
+                      if (sw == null) return
+                      val dark = analyse(sw)
+                      sw.recycle()
+                      if (dark != null) {
+                          handler.post {
+                              if (dark != bgDark) {
+                                  bgDark = dark
+                                  applyColor()
+                              }
+                          }
                       }
-                      return Typeface.create(fontName, if (weight >= 600) Typeface.BOLD else Typeface.NORMAL)
-                  } catch (_: Exception) {
-                      return Typeface.DEFAULT
+                  } catch (_: Throwable) {
+                  } finally {
+                      try { hb.close() } catch (_: Throwable) {}
                   }
               }
 
-              private fun createFromFile(path: String, weight: Int): Typeface {
-                  val f = File(path)
-                  if (!f.exists()) return Typeface.DEFAULT
-                  
-                  if (Build.VERSION.SDK_INT >= 26) {
-                      val builder = Typeface.Builder(f)
-                      if (weight >= 100) builder.setWeight(weight)
-                      return builder.build() ?: Typeface.DEFAULT
-                  } else {
-                      return Typeface.createFromFile(f)
+              /**
+               * Median brightness of a thin strip of the status bar area just to the right of the clock
+               * (so the clock's own pixels are never measured). Returns true = dark, false = light,
+               * null = keep the current colour (hysteresis, avoids flicker).
+               */
+              private fun analyse(b: Bitmap): Boolean? {
+                  val d = resources.displayMetrics.density
+                  val barH = min(statusBarHeightPx(), b.height)
+                  if (barH <= 0) return null
+                  val clockW = (clockView?.width ?: 0).let { if (it > 0) it else (44 * d).toInt() }
+                  var x0 = (posX * d).toInt() + clockW + (6 * d).toInt()
+                  var x1 = min(b.width, x0 + (110 * d).toInt())
+                  if (x1 - x0 < (16 * d).toInt()) {
+                      x0 = b.width / 4
+                      x1 = b.width * 3 / 4
+                  }
+                  val y0 = barH / 5
+                  val y1 = barH * 4 / 5
+                  val hist = IntArray(256)
+                  var n = 0
+                  var y = y0
+                  while (y < y1) {
+                      var x = x0
+                      while (x < x1) {
+                          val c = b.getPixel(x, y)
+                          val l = (0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c)).toInt()
+                          hist[l.coerceIn(0, 255)]++
+                          n++
+                          x += 3
+                      }
+                      y += 3
+                  }
+                  if (n == 0) return null
+                  var acc = 0
+                  var median = 0
+                  for (i in 0..255) {
+                      acc += hist[i]
+                      if (acc * 2 >= n) { median = i; break }
+                  }
+                  return when {
+                      median > 150 -> false
+                      median < 120 -> true
+                      else -> null
                   }
               }
           }
@@ -915,44 +848,72 @@ jobs:
           cat > app/src/main/java/com/kyrox/statusclock/MainActivity.kt <<'KX_EOF'
           package com.kyrox.statusclock
 
+          import android.Manifest
           import android.app.Activity
           import android.app.AlertDialog
+          import android.content.ComponentName
           import android.content.Intent
           import android.content.SharedPreferences
+          import android.content.pm.PackageManager
+          import android.content.res.Configuration
           import android.net.Uri
+          import android.os.Build
           import android.os.Bundle
+          import android.os.PowerManager
+          import android.provider.OpenableColumns
           import android.provider.Settings
+          import android.text.InputType
+          import android.view.Gravity
           import android.view.ViewGroup
+          import android.view.inputmethod.EditorInfo
+          import android.view.inputmethod.InputMethodManager
           import android.widget.Button
           import android.widget.CheckBox
           import android.widget.EditText
           import android.widget.LinearLayout
+          import android.widget.RadioButton
+          import android.widget.RadioGroup
           import android.widget.ScrollView
           import android.widget.TextView
+          import android.widget.Toast
           import java.io.File
-          import java.io.FileOutputStream
           import java.util.Locale
 
           class MainActivity : Activity() {
 
               private lateinit var sp: SharedPreferences
+              private lateinit var root: LinearLayout
               private lateinit var statusText: TextView
-              private val PICK_FONT = 1001
+              private lateinit var fontLabel: TextView
+              private lateinit var fontBox: EditText
+              private var dp = 1f
+
+              private val reqFont = 4711
+              private val reqNotif = 4712
+
+              private fun px(v: Int) = (v * dp).toInt()
+
+              private fun isNight() =
+                  (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                      Configuration.UI_MODE_NIGHT_YES
+
+              private fun themeRes(): Int = when (sp.getInt(Prefs.THEME, 0)) {
+                  1 -> R.style.ThemeLight
+                  2 -> R.style.ThemeDark
+                  3 -> R.style.ThemeAmoled
+                  else -> if (isNight()) R.style.ThemeDark else R.style.ThemeLight
+              }
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   sp = Prefs.sp(this)
-                  if (sp.getBoolean(Prefs.UI_DARK, false)) {
-                      setTheme(android.R.style.Theme_Material_NoActionBar)
-                  } else {
-                      setTheme(android.R.style.Theme_Material_Light_NoActionBar)
-                  }
+                  setTheme(themeRes())
                   super.onCreate(savedInstanceState)
-                  val dp = resources.displayMetrics.density
-                  fun px(v: Int) = (v * dp).toInt()
+                  dp = resources.displayMetrics.density
 
-                  val root = LinearLayout(this).apply {
+                  root = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(px(20), px(24), px(20), px(32))
+                      isFocusableInTouchMode = true   // keeps the keyboard closed until a field is tapped
                   }
 
                   root.addView(TextView(this).apply {
@@ -971,94 +932,113 @@ jobs:
                   root.addView(TextView(this).apply {
                       setPadding(0, px(16), 0, px(4))
                       text = "2. Line up the RED clock exactly on the real clock in this screen's status bar " +
-                          "(top-left). The red clock should sit right on top of the real one."
-                  })
-                  root.addView(TextView(this).apply {
-                      textSize = 12f
-                      text = "Buttons: the outer two move in big steps, the inner two in small steps."
+                          "(top-left). Red text over white text should look like one clock. " +
+                          "Use − / + for fine steps, tap ±step to change the step size, or type an exact number."
                   })
 
-                  stepper(root, "X position (dp from left)", Prefs.X, Prefs.DEF_X, 1.0f, 0.1f)
-                  stepper(root, "Y position (dp from top)", Prefs.Y, Prefs.DEF_Y, 1.0f, 0.1f)
-                  stepper(root, "Size (dp)", Prefs.SIZE, Prefs.DEF_SIZE, 0.5f, 0.05f)
-                  stepper(root, "Weight (0 = default)", Prefs.WGHT, 0f, 50f, 10f)
-
-                  root.addView(TextView(this).apply {
-                      setPadding(0, px(16), 0, 0)
-                      text = "Font: 'system', family name, or uploaded file"
-                  })
-                  val fontBox = EditText(this).apply {
-                      setText(sp.getString(Prefs.FONT, Prefs.DEF_FONT))
-                      setSingleLine(true)
+                  fine(root, "X (dp from left)", Prefs.X, Prefs.DEF_X, floatArrayOf(0.1f, 0.5f, 1f, 5f), 1, 0f, 2000f)
+                  fine(root, "Y (dp from top)", Prefs.Y, Prefs.DEF_Y, floatArrayOf(0.1f, 0.5f, 1f, 5f), 1, -100f, 500f)
+                  fine(root, "Size (dp)", Prefs.SIZE, Prefs.DEF_SIZE, floatArrayOf(0.1f, 0.5f, 1f, 5f), 1, 4f, 80f)
+                  fine(
+                      root, "Weight (0 = font default, 100-900)", Prefs.WGHT, 0f,
+                      floatArrayOf(1f, 10f, 50f, 100f), 0, 0f, 1000f
+                  ) { cur, next ->
+                      when {
+                          cur < 1f && next > cur -> 400f   // first tap up from "default" starts at Regular
+                          next < 1f -> 0f                  // anything below 1 means "font default"
+                          else -> next
+                      }
                   }
+
+                  // ---------------------------------------------------------- clock colour
+                  root.addView(heading("Clock colour"))
+                  root.addView(radios(
+                      listOf(
+                          "Always white",
+                          "Always black",
+                          "Follow day / night (system dark mode)",
+                          "Match the background (like other status bar icons)"
+                      ),
+                      Prefs.colorMode(sp), 1000
+                  ) { sp.edit().putInt(Prefs.COLOR, it).apply() })
+                  root.addView(note("\"Match the background\" needs Android 11+ (older phones fall back to day / night). " +
+                      "It also needs the accessibility service to be switched off and on once after this update."))
+
+                  // ------------------------------------------------------------------ font
+                  root.addView(heading("Font"))
+                  fontLabel = TextView(this)
+                  root.addView(fontLabel)
+                  root.addView(note("\"System font\" follows your phone's font and theme automatically. " +
+                      "Weight works with variable fonts (MiSans / Roboto VF) and falls back to bold on plain fonts."))
+
+                  root.addView(Button(this).apply {
+                      text = "Use system font (follows theme)"
+                      setOnClickListener {
+                          sp.edit().putString(Prefs.FONT, Prefs.FONT_SYSTEM).apply()
+                          refreshFont()
+                      }
+                  })
+                  root.addView(Button(this).apply {
+                      text = "Upload a font file (.ttf / .otf)"
+                      setOnClickListener { pickFontFile() }
+                  })
+                  root.addView(Button(this).apply {
+                      text = "Pick a font from the list"
+                      setOnClickListener { showFontList() }
+                  })
+                  root.addView(Button(this).apply {
+                      text = "Delete an uploaded font"
+                      setOnClickListener { showDeleteList() }
+                  })
+
+                  root.addView(TextView(this).apply {
+                      setPadding(0, px(8), 0, 0)
+                      text = "Or type a family name / full file path:"
+                  })
+                  fontBox = EditText(this).apply { setSingleLine(true) }
                   root.addView(fontBox)
                   root.addView(Button(this).apply {
-                      text = "Apply font"
+                      text = "Apply typed font"
                       setOnClickListener {
-                          sp.edit().putString(Prefs.FONT, fontBox.text.toString().trim()).apply()
+                          val v = fontBox.text.toString().trim()
+                          sp.edit().putString(Prefs.FONT, if (v.isEmpty()) Prefs.FONT_SYSTEM else v).apply()
+                          refreshFont()
                       }
                   })
-                  root.addView(Button(this).apply {
-                      text = "Upload & use custom font"
-                      setOnClickListener {
-                          val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                              type = "font/*"
-                              addCategory(Intent.CATEGORY_OPENABLE)
-                          }
-                          startActivityForResult(intent, PICK_FONT)
-                      }
-                  })
-                  root.addView(Button(this).apply {
-                      text = "Pick from installed font files"
-                      setOnClickListener {
-                          val files = findFonts()
-                          if (files.isEmpty()) {
-                              AlertDialog.Builder(this@MainActivity).setMessage("No readable font files found.").setPositiveButton("OK", null).show()
-                          } else {
-                              val names = files.map { File(it).name }.toTypedArray()
-                              AlertDialog.Builder(this@MainActivity).setTitle("Pick a font (Mi... fonts first)").setItems(names) { _, which ->
-                                  fontBox.setText(files[which])
-                                  sp.edit().putString(Prefs.FONT, files[which]).apply()
-                              }.show()
-                          }
-                      }
-                  })
+                  refreshFont()
 
-                  root.addView(TextView(this).apply {
-                      setPadding(0, px(12), 0, 0)
-                      textSize = 12f
-                      text = "The clock colour follows the background automatically (white on dark, black on light), like the other status bar icons."
-                  })
+                  // ------------------------------------------------------------ other options
+                  root.addView(heading("Options"))
+                  root.addView(check("Show AM/PM (12-hour phones only)", Prefs.AMPM, false))
+                  root.addView(check("Smart mode (experimental): hide while the real clock is visible", Prefs.SMART, false))
 
-                  root.addView(check("Smart mode: hide while the real clock is visible", Prefs.SMART, false))
-
-                  val darkModeCheck = check("Dark Mode (App Interface)", Prefs.UI_DARK, false)
-                  darkModeCheck.setOnCheckedChangeListener { _, on ->
-                      sp.edit().putBoolean(Prefs.UI_DARK, on).apply()
+                  // ------------------------------------------------------------- appearance
+                  root.addView(heading("App appearance"))
+                  root.addView(radios(
+                      listOf("Auto (follow system)", "Light", "Dark", "AMOLED black"),
+                      sp.getInt(Prefs.THEME, 0), 2000
+                  ) {
+                      sp.edit().putInt(Prefs.THEME, it).apply()
                       recreate()
-                  }
-                  root.addView(darkModeCheck)
-
-                  if (Healer.canHeal(this)) {
-                      root.addView(check("Auto re-enable the accessibility service if the system turns it off", Prefs.HEAL, true))
-                  } else {
-                      root.addView(TextView(this).apply {
-                          setPadding(0, px(12), 0, 0)
-                          textSize = 12f
-                          text = "Optional auto-recovery: once, from a computer, run\n" +
-                              "adb shell pm grant com.kyrox.statusclock android.permission.WRITE_SECURE_SETTINGS\n" +
-                              "Then reopen this app."
-                      })
-                  }
-
-                  root.addView(Button(this).apply {
-                      text = "App info (battery & autostart)"
-                      setOnClickListener {
-                          try {
-                              startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-                          } catch (_: Exception) {}
-                      }
                   })
+
+                  // ------------------------------------------------------------ persistence
+                  root.addView(heading("Keep it running"))
+                  root.addView(check("Keep alive (shows a tiny silent notification)", Prefs.KEEP, true))
+                  root.addView(Button(this).apply {
+                      text = "Battery: set to Unrestricted"
+                      setOnClickListener { requestBatteryExemption() }
+                  })
+                  root.addView(Button(this).apply {
+                      text = "Autostart settings (Xiaomi / MIUI / HyperOS)"
+                      setOnClickListener { openAutostart() }
+                  })
+                  root.addView(Button(this).apply {
+                      text = "App info"
+                      setOnClickListener { openAppInfo() }
+                  })
+                  root.addView(note("Also open Recents and lock this app (long-press its card > lock) so the system " +
+                      "does not clear it. If the service still gets switched off, turn it on again in Accessibility."))
 
                   root.addView(Button(this).apply {
                       text = "Reset to defaults"
@@ -1069,6 +1049,7 @@ jobs:
                               .putFloat(Prefs.SIZE, Prefs.DEF_SIZE)
                               .putString(Prefs.FONT, Prefs.DEF_FONT)
                               .putFloat(Prefs.WGHT, 0f)
+                              .putInt(Prefs.COLOR, Prefs.MODE_WHITE)
                               .apply()
                           recreate()
                       }
@@ -1076,61 +1057,238 @@ jobs:
 
                   root.addView(TextView(this).apply {
                       setPadding(0, px(16), 0, 0)
-                      text = "3. Go to the home screen. The clock shows only there. " +
-                          "If it disappears after a while, set this app's battery to 'No restrictions' " +
-                          "and enable Autostart in MIUI settings."
+                      text = "3. Go to the home screen. The clock shows only there."
                   })
 
                   setContentView(ScrollView(this).apply {
                       addView(root, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                   })
+
+                  askNotificationPermission()
               }
 
-              private fun fmt(v: Float): String {
-                  val r = Math.round(v)
-                  return if (Math.abs(v - r) < 0.0001f) r.toString()
-                  else String.format(Locale.US, "%.2f", v).trimEnd('0').trimEnd('.')
+              // ================================================================ UI helpers
+
+              private fun heading(t: String) = TextView(this).apply {
+                  text = t
+                  textSize = 17f
+                  setTypeface(typeface, android.graphics.Typeface.BOLD)
+                  setPadding(0, px(22), 0, px(4))
               }
 
-              // One title line (with the current value) and, under it, one row of four equal-width buttons.
-              // Equal weights keep every button on screen and give the title the full width.
-              private fun stepper(root: LinearLayout, title: String, key: String, def: Float, coarse: Float, fine: Float) {
-                  val dp = resources.displayMetrics.density
-                  fun px(v: Int) = (v * dp).toInt()
+              private fun note(t: String) = TextView(this).apply {
+                  text = t
+                  textSize = 12.5f
+                  alpha = 0.75f
+                  setPadding(0, px(2), 0, px(4))
+              }
 
-                  val label = TextView(this).apply {
-                      textSize = 14f
-                      setPadding(0, px(14), 0, px(2))
+              private fun radios(options: List<String>, current: Int, baseId: Int, onPick: (Int) -> Unit): RadioGroup {
+                  val g = RadioGroup(this)
+                  options.forEachIndexed { i, t ->
+                      g.addView(RadioButton(this).apply { id = baseId + i; text = t })
                   }
-                  fun refresh() {
-                      label.text = title + ": " + fmt(sp.getFloat(key, def))
-                  }
-                  fun change(delta: Float) {
-                      sp.edit().putFloat(key, sp.getFloat(key, def) + delta).apply()
-                      refresh()
+                  g.check(baseId + current)
+                  g.setOnCheckedChangeListener { _, id -> onPick(id - baseId) }
+                  return g
+              }
+
+              private fun check(text: String, key: String, def: Boolean): CheckBox =
+                  CheckBox(this).apply {
+                      this.text = text
+                      isChecked = sp.getBoolean(key, def)
+                      setOnCheckedChangeListener { _, on -> sp.edit().putBoolean(key, on).apply() }
                   }
 
-                  val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                  val steps = listOf(-coarse, -fine, fine, coarse)
-                  for (d in steps) {
-                      val b = Button(this).apply {
-                          text = (if (d > 0f) "+" else "-") + fmt(Math.abs(d))
-                          textSize = 13f
-                          setAllCaps(false)
-                          minWidth = 0
-                          minimumWidth = 0
-                          minHeight = 0
-                          minimumHeight = 0
-                          setPadding(px(2), px(10), px(2), px(10))
-                          setOnClickListener { change(d) }
+              /**
+               * A setting with  [−] [ typed value ] [+] [±step]  controls.
+               * Tap ±step to cycle through the available step sizes.
+               */
+              private fun fine(
+                  parent: LinearLayout, title: String, key: String, def: Float,
+                  steps: FloatArray, decimals: Int, min: Float, max: Float,
+                  snap: ((Float, Float) -> Float)? = null
+              ) {
+                  val scale = when (decimals) { 0 -> 1f; 1 -> 10f; else -> 100f }
+                  var stepIdx = 0
+
+                  fun fmt(v: Float): String = String.format(Locale.US, "%." + decimals + "f", v)
+                  fun stepText(s: Float): String =
+                      "±" + (if (s == s.toInt().toFloat()) s.toInt().toString() else s.toString())
+
+                  parent.addView(TextView(this).apply {
+                      text = title
+                      textSize = 15f
+                      setPadding(0, px(14), 0, 0)
+                  })
+
+                  val edit = EditText(this).apply {
+                      inputType = InputType.TYPE_CLASS_NUMBER or
+                          InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+                      setSingleLine(true)
+                      gravity = Gravity.CENTER
+                      imeOptions = EditorInfo.IME_ACTION_DONE
+                      layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+
+                  fun show(v: Float) {
+                      edit.setText(fmt(v))
+                      edit.setSelection(edit.text.length)
+                  }
+
+                  fun commit(raw: Float) {
+                      val cur = sp.getFloat(key, def)
+                      var v = snap?.invoke(cur, raw) ?: raw
+                      v = Math.round(v.coerceIn(min, max) * scale) / scale
+                      sp.edit().putFloat(key, v).apply()
+                      show(v)
+                  }
+
+                  fun commitTyped() {
+                      val v = edit.text.toString().toFloatOrNull()
+                      if (v == null) show(sp.getFloat(key, def)) else commit(v)
+                  }
+
+                  val minus = Button(this).apply {
+                      text = "−"
+                      textSize = 20f
+                      minWidth = px(52)
+                      minimumWidth = px(52)
+                      setOnClickListener {
+                          val cur = sp.getFloat(key, def)
+                          commit(cur - steps[stepIdx])
                       }
-                      val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                      lp.setMargins(px(2), 0, px(2), 0)
-                      row.addView(b, lp)
                   }
-                  refresh()
-                  root.addView(label)
-                  root.addView(row)
+                  val plus = Button(this).apply {
+                      text = "+"
+                      textSize = 20f
+                      minWidth = px(52)
+                      minimumWidth = px(52)
+                      setOnClickListener {
+                          val cur = sp.getFloat(key, def)
+                          commit(cur + steps[stepIdx])
+                      }
+                  }
+                  val stepBtn = Button(this).apply {
+                      text = stepText(steps[0])
+                      minWidth = px(64)
+                      minimumWidth = px(64)
+                      setOnClickListener {
+                          stepIdx = (stepIdx + 1) % steps.size
+                          text = stepText(steps[stepIdx])
+                      }
+                  }
+
+                  edit.setOnEditorActionListener { _, actionId, _ ->
+                      if (actionId == EditorInfo.IME_ACTION_DONE) {
+                          commitTyped()
+                          edit.clearFocus()
+                          root.requestFocus()
+                          (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+                              .hideSoftInputFromWindow(edit.windowToken, 0)
+                          true
+                      } else false
+                  }
+                  edit.setOnFocusChangeListener { _, has -> if (!has) commitTyped() }
+
+                  show(sp.getFloat(key, def))
+
+                  parent.addView(LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      addView(minus)
+                      addView(edit)
+                      addView(plus)
+                      addView(stepBtn)
+                  })
+              }
+
+              // ================================================================== fonts
+
+              private fun refreshFont() {
+                  val f = sp.getString(Prefs.FONT, Prefs.DEF_FONT) ?: Prefs.DEF_FONT
+                  fontLabel.text = "Current font: " + when {
+                      f == Prefs.FONT_SYSTEM -> "System font (follows theme)"
+                      f.startsWith("/") -> File(f).name
+                      else -> f
+                  }
+                  fontBox.setText(if (f == Prefs.FONT_SYSTEM) "" else f)
+              }
+
+              private fun fontsDir(): File = File(filesDir, "fonts").apply { mkdirs() }
+
+              private fun uploadedFonts(): List<File> =
+                  (fontsDir().listFiles()?.filter { it.isFile } ?: emptyList()).sortedBy { it.name.lowercase() }
+
+              private fun pickFontFile() {
+                  val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                      addCategory(Intent.CATEGORY_OPENABLE)
+                      type = "*/*"
+                      putExtra(
+                          Intent.EXTRA_MIME_TYPES,
+                          arrayOf(
+                              "font/ttf", "font/otf", "font/sfnt", "font/collection",
+                              "application/x-font-ttf", "application/x-font-otf",
+                              "application/x-font-opentype", "application/vnd.ms-opentype",
+                              "application/octet-stream"
+                          )
+                      )
+                  }
+                  try {
+                      startActivityForResult(i, reqFont)
+                  } catch (_: Exception) {
+                      toast("No file picker available")
+                  }
+              }
+
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  if (requestCode == reqFont && resultCode == RESULT_OK) {
+                      data?.data?.let { importFont(it) }
+                  }
+              }
+
+              private fun importFont(uri: Uri) {
+                  var name = "font_" + System.currentTimeMillis() + ".ttf"
+                  try {
+                      contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                          if (c.moveToFirst()) {
+                              val n = c.getString(0)
+                              if (!n.isNullOrBlank()) name = n
+                          }
+                      }
+                  } catch (_: Exception) {}
+
+                  val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                  val lower = safe.lowercase()
+                  if (!(lower.endsWith(".ttf") || lower.endsWith(".otf") || lower.endsWith(".ttc"))) {
+                      toast("Please pick a .ttf, .otf or .ttc font file")
+                      return
+                  }
+
+                  val dest = File(fontsDir(), safe)
+                  try {
+                      val input = contentResolver.openInputStream(uri)
+                      if (input == null) {
+                          toast("Could not read that file")
+                          return
+                      }
+                      input.use { ins -> dest.outputStream().use { out -> ins.copyTo(out) } }
+                  } catch (_: Exception) {
+                      dest.delete()
+                      toast("Could not read that file")
+                      return
+                  }
+
+                  if (!FontLoader.canOpen(dest.absolutePath)) {
+                      dest.delete()
+                      toast("That file is not a usable font")
+                      return
+                  }
+
+                  sp.edit().putString(Prefs.FONT, dest.absolutePath).apply()
+                  refreshFont()
+                  toast("Font added and applied")
               }
 
               private fun findFonts(): List<String> {
@@ -1149,47 +1307,113 @@ jobs:
                   return out.sortedWith(compareBy({ !File(it).name.lowercase().startsWith("mi") }, { File(it).name.lowercase() }))
               }
 
-              private fun check(text: String, key: String, def: Boolean): CheckBox =
-                  CheckBox(this).apply {
-                      this.text = text
-                      isChecked = sp.getBoolean(key, def)
-                      setOnCheckedChangeListener { _, on -> sp.edit().putBoolean(key, on).apply() }
+              private fun showFontList() {
+                  val uploaded = uploadedFonts().map { it.absolutePath }
+                  val paths = listOf(Prefs.FONT_SYSTEM) + uploaded + findFonts()
+                  val names = paths.map {
+                      when {
+                          it == Prefs.FONT_SYSTEM -> "★ System font (follows theme)"
+                          uploaded.contains(it) -> "⬆ " + File(it).name
+                          else -> File(it).name
+                      }
+                  }.toTypedArray()
+                  AlertDialog.Builder(this)
+                      .setTitle("Pick a font")
+                      .setItems(names) { _, which ->
+                          sp.edit().putString(Prefs.FONT, paths[which]).apply()
+                          refreshFont()
+                      }
+                      .show()
+              }
+
+              private fun showDeleteList() {
+                  val files = uploadedFonts()
+                  if (files.isEmpty()) {
+                      toast("No uploaded fonts")
+                      return
                   }
+                  AlertDialog.Builder(this)
+                      .setTitle("Delete which font?")
+                      .setItems(files.map { it.name }.toTypedArray()) { _, which ->
+                          val f = files[which]
+                          if (sp.getString(Prefs.FONT, "") == f.absolutePath) {
+                              sp.edit().putString(Prefs.FONT, Prefs.FONT_SYSTEM).apply()
+                          }
+                          f.delete()
+                          refreshFont()
+                          toast("Deleted " + f.name)
+                      }
+                      .show()
+              }
+
+              // ============================================================== persistence
+
+              private fun askNotificationPermission() {
+                  if (Build.VERSION.SDK_INT >= 33 &&
+                      checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+                      !sp.getBoolean(Prefs.ASKED_NOTIF, false)
+                  ) {
+                      sp.edit().putBoolean(Prefs.ASKED_NOTIF, true).apply()
+                      requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), reqNotif)
+                  }
+              }
+
+              private fun batteryOk(): Boolean = try {
+                  (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
+              } catch (_: Exception) { false }
+
+              private fun requestBatteryExemption() {
+                  try {
+                      startActivity(
+                          Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+                      )
+                  } catch (_: Exception) {
+                      try {
+                          startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                      } catch (_: Exception) {
+                          openAppInfo()
+                      }
+                  }
+              }
+
+              private fun openAutostart() {
+                  try {
+                      startActivity(
+                          Intent().setComponent(
+                              ComponentName(
+                                  "com.miui.securitycenter",
+                                  "com.miui.permcenter.autostart.AutoStartManagementActivity"
+                              )
+                          )
+                      )
+                  } catch (_: Exception) {
+                      openAppInfo()
+                  }
+              }
+
+              private fun openAppInfo() {
+                  try {
+                      startActivity(
+                          Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                      )
+                  } catch (_: Exception) {}
+              }
+
+              private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_LONG).show()
+
+              // ================================================================ lifecycle
 
               private fun serviceEnabled(): Boolean {
                   val s = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
                   return s != null && s.contains("$packageName/")
               }
 
-              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-                  super.onActivityResult(requestCode, resultCode, data)
-                  if (requestCode == PICK_FONT && resultCode == RESULT_OK) {
-                      data?.data?.let { uri ->
-                          try {
-                              val target = File(filesDir, "custom_font.ttf")
-                              val input = contentResolver.openInputStream(uri) ?: return@let
-                              val output = FileOutputStream(target)
-                              input.copyTo(output)
-                              input.close()
-                              output.close()
-                              sp.edit().putString(Prefs.FONT, target.absolutePath).apply()
-                              AlertDialog.Builder(this).setMessage("Font uploaded and applied!").setPositiveButton("OK", null).show()
-                          } catch (e: Exception) {
-                              AlertDialog.Builder(this).setMessage("Failed to upload font: ${e.message}").setPositiveButton("OK", null).show()
-                          }
-                      }
-                  }
-              }
-
               override fun onResume() {
                   super.onResume()
                   sp.edit().putBoolean(Prefs.CAL, true).apply()
-                  if (Healer.canHeal(this)) {
-                      Healer.ensure(this)
-                      Healer.schedule(this)
-                  }
-                  statusText.text = (if (serviceEnabled()) "Status: ON (service running)" else "Status: OFF. Turn it on below.") +
-                      (if (sp.getBoolean(Prefs.SMART, false)) "\nSmart mode: " + Diag.smart else "")
+                  statusText.text =
+                      (if (serviceEnabled()) "Status: ON (service running)" else "Status: OFF. Turn it on below.") +
+                          "\nBattery: " + (if (batteryOk()) "unrestricted ✓" else "restricted - tap the Battery button below")
               }
 
               override fun onPause() {
@@ -1198,6 +1422,140 @@ jobs:
               }
           }
           KX_EOF
+          mkdir -p app/src/main/res/drawable-nodpi
+          base64 -d > app/src/main/res/drawable-nodpi/ic_launcher_foreground.png <<'KX_B64'
+          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
+          KX_B64
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
