@@ -55,8 +55,8 @@ jobs:
                   applicationId = "com.kyrox.statusclock"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 5
-                  versionName = "1.4"
+                  versionCode = 6
+                  versionName = "1.5"
               }
               buildTypes {
                   release { isMinifyEnabled = false }
@@ -378,9 +378,9 @@ jobs:
                   val v = clockView ?: return
                   val p = Prefs.sp(this)
 
-                  // Use hh:mm to ensure the hour is always two digits, preventing width shifts.
-                  v.format12Hour = if (p.getBoolean(Prefs.AMPM, false)) "hh:mm a" else "hh:mm"
-                  v.format24Hour = "HH:mm"
+                  // Use single 'h' for 12-hour and 'H' for 24-hour to drop the leading zero.
+                  v.format12Hour = if (p.getBoolean(Prefs.AMPM, false)) "h:mm a" else "h:mm"
+                  v.format24Hour = "H:mm"
                   v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, p.getFloat(Prefs.SIZE, Prefs.DEF_SIZE))
                   
                   // Force tabular numbers and left alignment to lock positions.
@@ -404,7 +404,7 @@ jobs:
 
                   // Measure the maximum possible width to lock the view size.
                   val paint = v.paint
-                  val maxText = if (p.getBoolean(Prefs.AMPM, false)) "88:88 AM" else "88:88"
+                  val maxText = if (p.getBoolean(Prefs.AMPM, false)) "12:88 AM" else "23:88"
                   val textWidth = paint.measureText(maxText).toInt()
                   val padding = (6 * resources.displayMetrics.density).toInt()
                   clockWidth = textWidth + padding
